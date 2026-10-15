@@ -258,7 +258,7 @@ dependencies:
       notes: Business Pack Foundation Python.
     - name: MuJoCo
       type: runtime
-      notes: mujoco 3.13.0 for composed World + vehicle validation, MJB compile, and spawn heights.
+      notes: mujoco 3.16.0 (since 2026-10-15; the car and road side) for composed World + vehicle validation, MJB compile, and spawn heights. The Drone native runtime stays 3.13.0.
     - name: Hakoniwa Business Pack Workspace
       type: tool
       notes: Provides HAKONIWA_WORKSPACE_ROOT and HAKONIWA_WORK_DIR, recipe.py, the City World Web UI that Urban Studio links to, and the drone-fleet-single-host workspace the fleet route materializes into.

@@ -217,7 +217,7 @@ interfaces:
     - path: recipes/business-pack/environment-studio.yaml
       description: Component-owned Business Pack Recipe (foundation_contract not_required) that declares hakoniwa-envsim and hakoniwa-urban-mobility as recipe_local_requirements and the Python packages installed into Foundation Python.
     - path: recipes/requirements/environment-studio.txt
-      description: Python requirements (PyYAML, mujoco 3.13.0, numpy, shapely, lxml, mapbox-earcut, trimesh, Pillow).
+      description: Python requirements (PyYAML, mujoco 3.16.0, numpy, shapely, lxml, mapbox-earcut, trimesh, Pillow).
     - path: types/environment-types.yaml
       description: Environment part Types.
     - path: catalogs/starter/catalog.yaml
@@ -232,7 +232,7 @@ dependencies:
       notes: Business Pack Foundation Python; the Studio does not create its own virtual environment.
     - name: MuJoCo
       type: package
-      notes: mujoco 3.13.0 Python package for physical validation and collider GLB compilation, shared with the Urban Recipes.
+      notes: mujoco 3.16.0 Python package (since 2026-10-15) for physical validation and collider GLB compilation, shared with the Urban Recipes.
     - name: hakoniwa-envsim
       type: repository
       notes: CityGML extraction, OpenStreetMap to CityGML conversion, PLATEAU City World builds, and the MJCF collider GLB converter (recipe_local_requirements, HAKONIWA_ENVSIM_ROOT).
