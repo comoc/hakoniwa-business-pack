@@ -162,7 +162,13 @@ leaves the Workspace shell; it does not replace a Recipe's `stop` operation.
 箱庭コア（hakoniwa-core-cpp / hakoniwa-core-pro / hakoniwa-pdu-python）を新しくするときの手順です。持ち主が死んだ鍵を検出するコア（hakoniwa-core-cpp#62、`hako-cmd` 1.1.0 以降）からは、古いコアが残した共有メモリのファイルがあると、起動を止めて知らせます。
 
 1. 動いている Recipe をすべて止める（各 Recipe の停止の手順。例：`urban_mobility.py stop`。Launcher のセッションが残っていないこと）
-2. Foundation を作り直す（`recipe.py configure`。コアの部品はまとめて入れ直されます）
+2. Workspace の中で、コアの部品をまとめて入れ直す。`recipe.py configure` は入っているもの（Receipt）を満たしていると判定して入れ直さないので、明示的に作り直します（依存する pdu-endpoint・pdu-bridge-core も一緒に作り直されます）：
+
+   ```bash
+   python tools/workspace.py run -- python tools/foundation.py build --recipe <recipe.yaml> --force hakoniwa-core-pro --force hakoniwa-pdu-python
+   ```
+
+   Windows で Urban を使う場合は、続けて `urban_mobility.py configure` をし直します（Urban の車の物理はコアの DLL の写しを隣に持つので、これを新しくするまで古いコアのまま動きます）
 3. Workspace に入る（`python tools/workspace.py enter`、または `run`）
 
 3 の入り口で、共有メモリの置き場所（`work/foundation/runtime/mmap`）が今のコアのものかを確かめます。前のコアのファイルが残っていて、Launcher が動いていなければ、`work/foundation/runtime/mmap-upgrade-<日時>/` に移して（証拠として新しい 3 つまで残す）、今のコアの印を付けます。Launcher が動いているときは何も移さず、止めてから入り直すよう表示します。
