@@ -246,6 +246,19 @@ profiles:
                 component_root / "lnx/linux-main_hako_drone_service",
             )
 
+            # Windows DLL names carry no version: the same contract loads there.
+            windows = native_runtime.load_catalog_contract(
+                ROOT / "catalog/components/hakoniwa-drone-core.yaml",
+                component_root,
+                requirement,
+                native_runtime_platforms.PeDependencyAdapter(),
+            )
+            self.assertEqual(windows.managed_runtimes[0].version, "7.6.5")
+            self.assertEqual(
+                windows.managed_runtimes[0].library,
+                component_root / "vendor/mujoco/bin/mujoco.dll",
+            )
+
     def test_common_validator_classifies_declared_and_undeclared_missing_libraries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

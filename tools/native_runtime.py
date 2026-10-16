@@ -263,7 +263,12 @@ def load_catalog_contract(
             f"managed_runtimes.{name}.platforms.{adapter.platform_id}",
         )
         library_template = platform_runtime.get("library")
-        if not isinstance(library_template, str) or "{version}" not in library_template:
+        # Windows DLL names carry no version (mujoco.dll); the version_file still
+        # names the runtime's version there.
+        versioned = getattr(adapter, "versioned_library_names", True)
+        if not isinstance(library_template, str) or (
+            versioned and "{version}" not in library_template
+        ):
             raise NativeRuntimeError(
                 f"native runtime contract {name} library must contain {{version}}: "
                 f"{library_template!r}"

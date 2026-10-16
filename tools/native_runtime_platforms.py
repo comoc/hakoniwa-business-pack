@@ -218,6 +218,9 @@ class PeDependencyAdapter:
     # against a contract. The other adapters leave it unset and keep byte
     # identity.
     case_insensitive_identity = True
+    # DLL names carry no version (MuJoCo's is mujoco.dll), so a managed runtime's
+    # library path cannot name one.
+    versioned_library_names = False
 
     # Approximation of the DLLs present on any supported Windows install. See
     # the class docstring: this is not the KnownDLLs list and cannot be.
