@@ -529,6 +529,25 @@ def materialize_mujoco_runtime(
     if mujoco is None:
         raise RecipeError("Catalog native runtime profile does not require MuJoCo")
     version = mujoco.version
+    try:
+        bundled_relative = mujoco.library.relative_to(drone_root)
+    except ValueError:
+        bundled_relative = Path()
+    if (
+        mujoco.library.is_file()
+        and bundled_relative.parts
+        and bundled_relative.parts[0] in {"lnx", "mac", "win"}
+    ):
+        return {
+            "mode": "bundled-with-native-distribution",
+            "requirements": str(contract.path),
+            "version_authority": str(mujoco.version_file),
+            "version": version,
+            "asset": None,
+            "sha256": _sha256(mujoco.library),
+            "library": str(mujoco.library.absolute()),
+            "link_mode": "distribution-relative-runtime-path",
+        }
     asset_name = _mujoco_asset(version, system_name, platform.machine())
     release_url = f"{MUJOCO_RELEASE_BASE}/{version}"
     checksum_url = f"{release_url}/{asset_name}.sha256"

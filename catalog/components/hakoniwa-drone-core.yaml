@@ -28,9 +28,9 @@ license:
     - Hakoniwa Drone PRO is not a separate component dependency; it is the commercial licensing path for this component.
     - Control Link and Scenario Link are optional licensed capabilities and must not be assumed to be included in every commercial agreement.
 verification:
-  verified_at: 2026-09-22
-  source_revision: 109d3a944908b185f79d554cfe08a8e2f0def205
-  source_ref: v4.1.1
+  verified_at: 2026-10-18
+  source_revision: 444ccc0f1213d65c07b2068ec6557ecf2f91a7b8
+  source_ref: v4.2.0
 summary: Drone simulation component with dynamics, PX4 and ArduPilot integration, Hakoniwa PDU integration, Python control APIs, multi-drone simulation, and extensible environment and sensor models. The same codebase is offered under non-commercial Hakoniwa Drone Core terms and commercial Hakoniwa Drone PRO licensing.
 category:
   primary: physics-environment
@@ -158,10 +158,10 @@ dependencies:
       notes: Required for native development builds.
     - name: MuJoCo runtime
       type: runtime
-      notes: Required by the native Drone distribution; the exact version is resolved from MUJOCO_VERSION.txt through NATIVE_RUNTIME_REQUIREMENTS.yaml instead of being duplicated by a consuming Recipe.
+      notes: Required by the native Drone distribution; v4.2.0 bundles the exact runtime named by MUJOCO_VERSION.txt in each OS archive.
     - name: Native platform shared libraries
       type: library
-      notes: OS-specific runtime libraries required by the distributed binaries are declared in NATIVE_RUNTIME_REQUIREMENTS.yaml; the v4.1.1 Linux contract includes libOpenGL.so.0.
+      notes: OS-specific runtime libraries required by the distributed binaries are declared in NATIVE_RUNTIME_REQUIREMENTS.yaml; the v4.2.0 archives include MuJoCo beside the binaries and Windows also includes GLFW.
   optional:
     - name: hakoniwa-core-pro
       type: repository
@@ -178,6 +178,39 @@ dependencies:
 native_runtime:
   schema_version: 1
   profiles:
+    public-v4.2.0:
+      distribution_release: v4.2.0
+      source_contract: NATIVE_RUNTIME_REQUIREMENTS.yaml
+      managed_runtimes:
+        mujoco:
+          required: true
+          version_file: MUJOCO_VERSION.txt
+          platforms:
+            linux:
+              library: lnx/libmujoco.so.{version}
+            macos:
+              library: mac/libmujoco.{version}.dylib
+            windows:
+              library: win/mujoco.dll
+      platforms:
+        linux:
+          dependency_inspector: elf
+          binary_roles:
+            drone_service: lnx/linux-main_hako_drone_service
+            visual_state_publisher: lnx/linux-drone_visual_state_publisher
+          required_libraries: ["libmujoco.so.3.16.0", "libOpenGL.so.0", "libglfw.so.3"]
+        macos:
+          dependency_inspector: macho
+          binary_roles:
+            drone_service: mac/mac-main_hako_drone_service
+            visual_state_publisher: mac/mac-drone_visual_state_publisher
+          required_libraries: ["libmujoco.3.16.0.dylib", "libglfw.3.dylib"]
+        windows:
+          dependency_inspector: pe
+          binary_roles:
+            drone_service: win/win-main_hako_drone_service.exe
+            visual_state_publisher: win/win-drone_visual_state_publisher.exe
+          required_libraries: ["mujoco.dll", "glfw3.dll"]
     public-v4.1.1:
       distribution_release: v4.1.1
       source_contract: NATIVE_RUNTIME_REQUIREMENTS.yaml

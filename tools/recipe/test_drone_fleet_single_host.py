@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import types
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -862,6 +863,46 @@ profiles:
                 library_content,
             )
             self.assertEqual(urlopen.call_count, 2)
+
+    def test_bundled_mujoco_runtime_is_reused_without_separate_download(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            drone_root = root / "hakoniwa-drone-core"
+            version = "3.16.0"
+            version_file = self._mujoco_version(drone_root, mujoco_version=version)
+            library = drone_root / f"lnx/libmujoco.so.{version}"
+            library.parent.mkdir(parents=True)
+            library.write_bytes(b"bundled-mujoco")
+            native_runtime = mock.Mock()
+            native_runtime.resolve_contract.return_value = (
+                mock.Mock(),
+                types.SimpleNamespace(
+                    path=drone_root / "NATIVE_RUNTIME_REQUIREMENTS.yaml",
+                    release=recipe.PUBLIC_DRONE_RELEASE,
+                    managed_runtimes=(
+                        types.SimpleNamespace(
+                            name="mujoco",
+                            version=version,
+                            version_file=version_file,
+                            library=library,
+                        ),
+                    ),
+                ),
+                mock.Mock(),
+            )
+
+            with mock.patch.object(
+                recipe, "load_native_runtime_module", return_value=native_runtime
+            ), mock.patch.object(recipe.urllib.request, "urlopen") as urlopen:
+                evidence = recipe.materialize_mujoco_runtime(
+                    drone_root, "Linux", root / "downloads"
+                )
+
+            self.assertEqual(evidence["mode"], "bundled-with-native-distribution")
+            self.assertEqual(evidence["version"], version)
+            self.assertEqual(evidence["library"], str(library))
+            self.assertIsNone(evidence["asset"])
+            urlopen.assert_not_called()
 
     def test_doctor_reports_missing_declared_linux_library_before_start(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
