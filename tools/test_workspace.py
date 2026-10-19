@@ -539,7 +539,7 @@ class WindowsBareCommandTest(unittest.TestCase):
                 found = workspace.resolve_bare_command("python", str(foundation.parent), ".COM;.EXE;.BAT;.CMD")
             finally:
                 os.chdir(previous)
-            self.assertEqual(str(found).lower(), str(foundation).lower())
+            self.assertEqual(Path(found), foundation)
 
     def test_a_command_only_on_the_workspace_path_resolves_with_pathext(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -551,7 +551,7 @@ class WindowsBareCommandTest(unittest.TestCase):
             for name in ("hako-cmd", "hako-cmd.CMD"):
                 with self.subTest(name=name):
                     found = workspace.resolve_bare_command(name, search, ".EXE;.CMD")
-                    self.assertEqual(str(found).lower(), str(tool).lower())
+                    self.assertEqual(Path(found), tool)
 
     def test_explicit_paths_and_unknown_commands_are_left_alone(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -576,7 +576,7 @@ class WindowsBareCommandTest(unittest.TestCase):
                     mock.patch.object(workspace.subprocess, "run",
                                       side_effect=lambda values, **_: calls.append(values) or mock.Mock(returncode=0)):
                 self.assertEqual(workspace.run_command(paths, ["--", "python", "-V"]), 0)
-            self.assertEqual([[v.lower() for v in call] for call in calls], [[str(foundation).lower(), "-v"]])
+            self.assertEqual(calls, [[str(foundation), "-V"]])
 
 
 class LegacyWorkspaceSwitchTest(unittest.TestCase):
