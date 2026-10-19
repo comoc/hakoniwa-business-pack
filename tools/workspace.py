@@ -589,23 +589,22 @@ def resolve_bare_command(name: str, search_path: str, pathext: str | None = None
         candidates = [name]
     else:
         candidates = [name + ext for ext in extensions]
+    wanted = [candidate.lower() for candidate in candidates]
     for folder in search_path.split(pathsep):
         folder = folder.strip().strip('"')
         if not folder:
             continue
-        for candidate in candidates:
-            full = os.path.join(folder, candidate)
-            if os.path.isfile(full):
-                return os.path.join(folder, _actual_name(folder, candidate))
+        try:
+            # Windows names match without regard to case; keep the file's own spelling
+            # (python.exe, not PATHEXT's python.EXE).
+            entries = {entry.lower(): entry for entry in os.listdir(folder)}
+        except OSError:
+            continue
+        for candidate in wanted:
+            entry = entries.get(candidate)
+            if entry and os.path.isfile(os.path.join(folder, entry)):
+                return os.path.join(folder, entry)
     return None
-
-
-def _actual_name(folder: str, name: str) -> str:
-    """The file's own spelling (python.exe, not PATHEXT's python.EXE); the name if unreadable."""
-    try:
-        return next((entry for entry in os.listdir(folder) if entry.lower() == name.lower()), name)
-    except OSError:
-        return name
 
 
 def run_command(paths: WorkspacePaths, command: Sequence[str]) -> int:
