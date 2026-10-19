@@ -573,6 +573,40 @@ def _interactive_shell_command(shell: str) -> list[str]:
     )
 
 
+def resolve_bare_command(name: str, search_path: str, pathext: str | None = None,
+                         pathsep: str = ";") -> str | None:
+    """Find a bare command (no folder in it) on the Workspace PATH only, Windows style.
+
+    Unlike shutil.which() on Windows, the caller's current folder is never searched, so a
+    stray python.exe there cannot win over the Foundation Python (#242). A name with a folder
+    in it (absolute or relative) is the caller's explicit choice and is left alone (None), as
+    is a name found nowhere on the PATH (the caller's previous behaviour).
+    """
+    if not name or os.path.dirname(name) or "/" in name or "\\" in name:
+        return None
+    extensions = [ext for ext in (pathext or ".COM;.EXE;.BAT;.CMD").split(";") if ext]
+    if any(name.lower().endswith(ext.lower()) for ext in extensions):
+        candidates = [name]
+    else:
+        candidates = [name + ext for ext in extensions]
+    wanted = [candidate.lower() for candidate in candidates]
+    for folder in search_path.split(pathsep):
+        folder = folder.strip().strip('"')
+        if not folder:
+            continue
+        try:
+            # Windows names match without regard to case; keep the file's own spelling
+            # (python.exe, not PATHEXT's python.EXE).
+            entries = {entry.lower(): entry for entry in os.listdir(folder)}
+        except OSError:
+            continue
+        for candidate in wanted:
+            entry = entries.get(candidate)
+            if entry and os.path.isfile(os.path.join(folder, entry)):
+                return os.path.join(folder, entry)
+    return None
+
+
 def run_command(paths: WorkspacePaths, command: Sequence[str]) -> int:
     values = list(command)
     if values and values[0] == "--":
@@ -584,8 +618,9 @@ def run_command(paths: WorkspacePaths, command: Sequence[str]) -> int:
     env = build_environment(paths)
     if os.name == "nt":
         # Windows looks in the parent's folder before PATH: a bare "python" would be the base
-        # interpreter behind the venv launcher, not the Foundation Python.
-        resolved = shutil.which(values[0], path=env.get("PATH"))
+        # interpreter behind the venv launcher, not the Foundation Python. shutil.which() is not
+        # enough: it also looks in the caller's current folder first (#242).
+        resolved = resolve_bare_command(values[0], env.get("PATH", ""), env.get("PATHEXT"))
         if resolved:
             values[0] = resolved
     return subprocess.run(
