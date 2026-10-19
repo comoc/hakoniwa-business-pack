@@ -519,6 +519,66 @@ if (Test-Path Env:\\HAKONIWA_WORKSPACE_ACTIVE) {{ exit 18 }}
         self.assertEqual(result, 0)
 
 
+class WindowsBareCommandTest(unittest.TestCase):
+    """#242: a bare command comes from the Workspace PATH, never from the caller's folder."""
+
+    def _exe(self, folder: Path, name: str) -> Path:
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / name
+        path.write_bytes(b"MZ")
+        return path
+
+    def test_stray_python_in_the_caller_folder_does_not_win(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stray = self._exe(root / "caller", "python.exe")
+            foundation = self._exe(root / "foundation" / "Scripts", "python.exe")
+            previous = os.getcwd()
+            os.chdir(stray.parent)
+            try:
+                found = workspace.resolve_bare_command("python", str(foundation.parent), ".COM;.EXE;.BAT;.CMD")
+            finally:
+                os.chdir(previous)
+            self.assertEqual(str(found).lower(), str(foundation).lower())
+
+    def test_a_command_only_on_the_workspace_path_resolves_with_pathext(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / "empty", root / "tools"
+            first.mkdir()
+            tool = self._exe(second, "hako-cmd.CMD")
+            search = ";".join([str(first), "", str(second)])
+            for name in ("hako-cmd", "hako-cmd.CMD"):
+                with self.subTest(name=name):
+                    found = workspace.resolve_bare_command(name, search, ".EXE;.CMD")
+                    self.assertEqual(str(found).lower(), str(tool).lower())
+
+    def test_explicit_paths_and_unknown_commands_are_left_alone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python = self._exe(root / "bin", "python.exe")
+            search = str(python.parent)
+            for name in (str(python), "bin/python.exe", "bin\\python.exe", ".\\python.exe", "nope"):
+                with self.subTest(name=name):
+                    self.assertIsNone(workspace.resolve_bare_command(name, search, ".EXE"))
+
+    def test_run_command_on_windows_uses_the_workspace_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            foundation = self._exe(root / "foundation", "python.exe")
+            paths = workspace.resolve_workspace(root / "bp", root / "work")
+            env = {"PATH": str(foundation.parent), "PATHEXT": ".EXE"}
+            calls = []
+            with mock.patch.object(workspace, "prepare"), \
+                    mock.patch.object(workspace, "reconcile_runtime"), \
+                    mock.patch.object(workspace, "build_environment", return_value=env), \
+                    mock.patch.object(workspace.os, "name", "nt"), \
+                    mock.patch.object(workspace.subprocess, "run",
+                                      side_effect=lambda values, **_: calls.append(values) or mock.Mock(returncode=0)):
+                self.assertEqual(workspace.run_command(paths, ["--", "python", "-V"]), 0)
+            self.assertEqual([[v.lower() for v in call] for call in calls], [[str(foundation).lower(), "-v"]])
+
+
 class LegacyWorkspaceSwitchTest(unittest.TestCase):
     def test_switch_removes_old_foundation_but_preserves_other_paths(self):
         with tempfile.TemporaryDirectory() as directory:
