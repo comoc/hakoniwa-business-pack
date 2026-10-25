@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+
+# workspace.py run sets HAKONIWA_WORK_DIR; these tests pass temporary roots and must not
+# resolve them to the real work/ directory.
+os.environ.pop("HAKONIWA_WORK_DIR", None)
 
 SCRIPT = (
     Path(__file__).resolve().parents[2]

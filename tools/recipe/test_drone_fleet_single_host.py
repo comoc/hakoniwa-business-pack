@@ -20,6 +20,10 @@ from unittest import mock
 from tools.recipe.path_test_support import contains_path
 
 
+# workspace.py run sets HAKONIWA_WORK_DIR; these tests pass temporary roots and must not
+# resolve them to the real work/ directory.
+os.environ.pop("HAKONIWA_WORK_DIR", None)
+
 SCRIPT = Path(__file__).with_name("drone_fleet_single_host.py")
 SPEC = importlib.util.spec_from_file_location("drone_fleet_single_host_recipe", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None

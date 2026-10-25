@@ -3,12 +3,17 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+
+# workspace.py run sets HAKONIWA_WORK_DIR; these tests pass temporary roots and must not
+# resolve them to the real work/ directory.
+os.environ.pop("HAKONIWA_WORK_DIR", None)
 
 SCRIPT = Path(__file__).with_name("shadow_hand_menagerie.py")
 SPEC = importlib.util.spec_from_file_location("shadow_hand_menagerie_recipe", SCRIPT)

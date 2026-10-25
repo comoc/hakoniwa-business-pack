@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,10 @@ from pathlib import Path
 
 from tools.recipe.path_test_support import contains_path
 
+
+# workspace.py run sets HAKONIWA_WORK_DIR; these tests pass temporary roots and must not
+# resolve them to the real work/ directory.
+os.environ.pop("HAKONIWA_WORK_DIR", None)
 
 SCRIPT = Path(__file__).with_name("drone_threejs.py")
 SPEC = importlib.util.spec_from_file_location("drone_threejs_recipe", SCRIPT)

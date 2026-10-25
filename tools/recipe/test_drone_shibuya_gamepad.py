@@ -8,10 +8,15 @@ import hashlib
 import io
 import json
 import contextlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+# workspace.py run sets HAKONIWA_WORK_DIR; these tests pass temporary roots and must not
+# resolve them to the real work/ directory.
+os.environ.pop("HAKONIWA_WORK_DIR", None)
 
 SCRIPT = Path(__file__).with_name("drone_shibuya_gamepad.py")
 SPEC = importlib.util.spec_from_file_location("drone_shibuya_gamepad_recipe", SCRIPT)

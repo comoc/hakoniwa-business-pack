@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+
+# workspace.py run sets HAKONIWA_WORK_DIR; these tests pass temporary roots and must not
+# resolve them to the real work/ directory.
+os.environ.pop("HAKONIWA_WORK_DIR", None)
 
 SCRIPT = Path(__file__).with_name("recipe.py")
 SPEC = importlib.util.spec_from_file_location("business_pack_recipe_guide", SCRIPT)
@@ -304,7 +309,7 @@ class RecipeGuideTest(unittest.TestCase):
             guide, "recipe_repository_root", return_value=Path("/recipe")
         ):
             variables, _ = guide.resolve_recipe_environment(Path("demo.yaml"), data)
-        self.assertEqual(variables["DEMO_BIN"], "/recipe/bin/linux-demo")
+        self.assertEqual(variables["DEMO_BIN"], f"{Path('/recipe')}/bin/linux-demo")
 
     def test_recipe_plan_clones_only_missing_default_git_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

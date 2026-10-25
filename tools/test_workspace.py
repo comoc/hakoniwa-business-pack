@@ -12,6 +12,10 @@ import venv
 from pathlib import Path
 from unittest import mock
 
+# workspace.py run sets HAKONIWA_WORK_DIR; these tests pass temporary roots and must not
+# resolve them to the real work/ directory.
+os.environ.pop("HAKONIWA_WORK_DIR", None)
+
 WORKSPACE_SCRIPT = Path(__file__).with_name("workspace.py")
 SPEC = importlib.util.spec_from_file_location("business_pack_workspace", WORKSPACE_SCRIPT)
 assert SPEC is not None and SPEC.loader is not None

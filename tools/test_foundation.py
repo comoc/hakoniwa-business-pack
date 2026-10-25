@@ -12,6 +12,10 @@ import unittest
 from pathlib import Path, PureWindowsPath
 from unittest import mock
 
+# workspace.py run sets HAKONIWA_WORK_DIR; these tests pass temporary roots and must not
+# resolve them to the real work/ directory.
+os.environ.pop("HAKONIWA_WORK_DIR", None)
+
 FOUNDATION_SCRIPT = Path(__file__).with_name("foundation.py")
 SPEC = importlib.util.spec_from_file_location("business_pack_foundation", FOUNDATION_SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
