@@ -1,0 +1,86 @@
+id: road-user-mutual-perspective-experience
+title: 自転車と自動車のドライバーが互いの見え方を体験する相互視点シミュレーション
+usecase_version: 0.1
+
+audience:
+  primary:
+    - demonstration-owner
+    - web-visualization-developer
+    - distributed-simulation-developer
+  notes:
+    - The intended end users are road-safety trainers, driving schools, and cyclists or drivers who join through a browser; there is no dedicated audience identifier for them yet.
+
+situation: >
+  A cyclist and a car driver share the same road but rarely understand what the other
+  can see. Eye height, cabin pillars, the hood or cab front, buildings, and parked
+  vehicles create blind zones that differ strongly between a bicycle and a sedan, SUV,
+  minivan, or large truck. Trainers want two people to experience the same traffic
+  situation at the same time from both sides, for example a car overtaking a cyclist
+  from behind while an oncoming vehicle may or may not leave enough room.
+
+problem: >
+  Video or single-player driving simulators show only one point of view. Comparing views
+  requires both road users to move in one consistent world and time, while each person
+  uses an ordinary browser rather than special hardware. Simulation ownership, vehicle
+  selection, and the viewpoint exchange must stay consistent across both participants.
+
+desired_outcome: >
+  Two participants join from browsers as a cyclist and as a driver with a selectable
+  vehicle type, drive in one shared real-time simulation, and see both their own driver
+  view and the partner's driver view side by side, with an explicit indication of whether
+  each is currently visible to the other.
+
+status:
+  feasibility: partially_feasible
+  validation: partially_verified
+  confidence: medium
+  rationale:
+    - A Recipe-owned composition of Python plant assets, a multi-client WebSocket gateway asset, and a Three.js client ran on native Windows x64 with two simultaneous clients.
+    - Vehicle motion is kinematic and the cabins are simplified, so the outcome is a perception and awareness experience rather than a validated driving-dynamics trainer.
+    - The Catalog has no bicycle or passenger-car dynamics component; the Recipe supplies its own models behind a replaceable PDU contract.
+
+realized_by:
+  - recipe_id: bicycle-car-mutual-view-driving
+    relationship: reference_implementation
+    validation_scope: >
+      Native Windows x64, localhost only: two WebSocket clients drove the bicycle and the
+      car (switched to the large-truck profile) in one Hakoniwa clock, and a browser
+      rendered both driver views with PiP and visibility indicators. A car overtook the cyclist
+      from behind with an oncoming bus timed to meet the overtake, the bus could be switched off
+      at runtime, and the browser warned while the lateral clearance was below 1 m.
+
+supported_by:
+  - component_id: hakoniwa-core-pro
+    role: Own shared-memory PDUs, asset lifecycle, and the single simulation clock shared by both road users.
+  - component_id: hakoniwa-pdu-python
+    role: Provide the Python PDU converters and the Launcher lifecycle used by the reference.
+  - component_id: hakoniwa-pdu-registry
+    role: Provide the existing geometry_msgs types used as the vehicle command and state contract.
+
+communication_notes:
+  safe_statements:
+    - Two browser participants can drive a bicycle and a selectable car type in one shared Hakoniwa simulation on one host.
+    - Each participant can view the partner's driver eye, including the partner's simplified cabin occlusion.
+  avoid_statements:
+    - The simulator reproduces real vehicle dynamics or certified driver field-of-view data.
+    - The current reference is validated for LAN, Internet, or multi-site sessions.
+
+limitations:
+  - Kinematic vehicle models and box-shaped cabins; mirrors are not rendered as mirror views.
+  - Only one synthetic two-lane road (the overtake scenario); real city data is not connected.
+  - Validated only on localhost on Windows x64; no authentication for network use.
+
+next_steps:
+  - Validate two-PC use on a LAN after a human decides the network exposure.
+  - Replace a kinematic plant with a MuJoCo or Robot Runtime vehicle using the same cmd/pose/vel contract.
+  - Connect a PLATEAU or Environment Studio world and add mirror views.
+  - Consider an audience identifier for road-safety trainers.
+
+tags:
+  - road-safety
+  - bicycle
+  - vehicle
+  - perspective
+  - multi-user
+  - browser
+  - threejs

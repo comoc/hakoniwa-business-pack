@@ -45,3 +45,8 @@ usecases:
     title: 独立したシミュレーション参加者の同期実行
     feasibility: feasible
     validation: partially_verified
+  - id: road-user-mutual-perspective-experience
+    path: examples/road-user-mutual-perspective-experience.yaml
+    title: 自転車と自動車のドライバーが互いの見え方を体験する相互視点シミュレーション
+    feasibility: partially_feasible
+    validation: partially_verified

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mutual View Driving</title>
+  <style>
+    :root { --panel: rgba(16, 20, 28, 0.78); --text: #f3f5f8; --accent: #4fc3f7; --warn: #ff5252; --ok: #66bb6a; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: var(--text);
+      font-family: system-ui, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif; }
+    canvas { display: block; }
+    [hidden] { display: none !important; }
+    .panel { position: absolute; background: var(--panel); border-radius: 8px; padding: 10px 14px; }
+    #hud { left: 16px; top: 16px; min-width: 220px; }
+    #hud .speed { font-size: 40px; font-weight: 700; line-height: 1; }
+    #hud .speed small { font-size: 14px; font-weight: 400; margin-left: 4px; }
+    #hud .row { margin-top: 6px; font-size: 14px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 13px; font-weight: 600; }
+    .badge.ok { background: var(--ok); color: #08130a; }
+    .badge.ng { background: var(--warn); color: #fff; }
+    .badge.mute { background: #555; color: #ddd; }
+    #pip-frame { position: absolute; border: 2px solid var(--accent); border-radius: 6px; pointer-events: none; }
+    #pip-label { position: absolute; background: var(--accent); color: #002; font-size: 13px; font-weight: 700;
+      padding: 2px 8px; border-radius: 4px; pointer-events: none; }
+    #map-frame { position: absolute; border: 1px solid #aaa; border-radius: 4px; pointer-events: none; }
+    #contact { left: 50%; top: 18%; transform: translateX(-50%); font-size: 28px; font-weight: 800;
+      background: rgba(200, 30, 30, 0.85); display: none; }
+    #help { right: 16px; bottom: 16px; font-size: 12px; line-height: 1.6; max-width: 300px; }
+    #help kbd { background: #333; border-radius: 3px; padding: 0 5px; font-family: inherit; }
+    #lobby { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: rgba(10, 12, 18, 0.92); }
+    #lobby .box { background: #1b2130; padding: 28px 32px; border-radius: 12px; max-width: 520px; }
+    #lobby h1 { margin: 0 0 6px; font-size: 22px; }
+    #lobby p { margin: 0 0 18px; color: #b8c0cc; font-size: 14px; }
+    #lobby button { font-size: 16px; padding: 10px 18px; margin: 4px 8px 4px 0; border-radius: 8px; border: 0;
+      background: var(--accent); color: #002; font-weight: 700; cursor: pointer; }
+    #lobby button.secondary { background: #3a4458; color: var(--text); }
+    #profile-select { font-size: 14px; padding: 4px; margin-left: 6px; }
+    #status { left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 13px; }
+    #scenario { left: 50%; top: 16px; transform: translateX(-50%); font-size: 14px; text-align: center;
+      max-width: 26vw; }
+    #scenario button { font-size: 13px; padding: 4px 10px; margin: 6px 4px 0; border-radius: 6px; border: 0;
+      background: var(--accent); color: #002; font-weight: 700; cursor: pointer; }
+    #scenario button.off { background: #555; color: #eee; }
+    #scenario button.secondary { background: #3a4458; color: var(--text); }
+    #scenario .line { margin-top: 4px; font-size: 13px; }
+    #passing-now { color: #ffd54f; font-weight: 700; }
+    #passing-warning { margin-top: 6px; padding: 6px 12px; border-radius: 6px; background: #c62828; color: #fff;
+      font-size: 18px; font-weight: 700; }
+    #passing-last.violation { color: #ff8a80; font-weight: 700; }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="hud" class="panel">
+    <div class="speed"><span id="speed">0</span><small>km/h</small></div>
+    <div class="row">あなた: <b id="me-label">-</b>
+      <select id="profile-select" hidden></select></div>
+    <div class="row">相手: <b id="partner-label">-</b>（<span id="distance">-</span> m）</div>
+    <div class="row">相手から自分が <span id="seen-by-partner" class="badge mute">-</span></div>
+    <div class="row">自分から相手が <span id="i-see-partner" class="badge mute">-</span></div>
+  </div>
+  <div id="scenario" class="panel">
+    <b id="scenario-name">-</b>
+    <div>
+      <button id="oncoming-toggle" hidden>対向バス: -</button>
+      <button id="reset-scenario" class="secondary">シナリオをリセット</button>
+    </div>
+    <div id="oncoming-phase" class="line"></div>
+    <div id="passing-now" class="line"></div>
+    <div id="passing-warning" hidden></div>
+    <div id="passing-last" class="line"></div>
+  </div>
+  <div id="pip-frame"></div>
+  <div id="pip-label">相手の視点</div>
+  <div id="map-frame"></div>
+  <div id="contact" class="panel">接触！</div>
+  <div id="help" class="panel">
+    <kbd>W</kbd>/<kbd>↑</kbd> 加速　<kbd>S</kbd>/<kbd>↓</kbd> ブレーキ（停止中は後退）<br>
+    <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> ハンドル　<kbd>Q</kbd><kbd>E</kbd> 左右を見る（自転車は後方確認まで）　<kbd>C</kbd> 正面<br>
+    <kbd>V</kbd> メインと PiP を入れ替え　<kbd>R</kbd> スタート位置へ戻る<br>
+    ゲームパッド: 左スティック ハンドル / R2 加速 / L2 ブレーキ / 右スティック 視線
+  </div>
+  <div id="status" class="panel">接続中…</div>
+  <div id="lobby" hidden>
+    <div class="box">
+      <h1>相互視点 運転シミュレーター</h1>
+      <p>自転車と自動車のドライバーが、互いに相手からどう見えているかを体験します。
+        役割を選んでください（もう一方は別のウィンドウや PC で開きます）。</p>
+      <button data-role="bike">自転車で参加</button>
+      <button data-role="car">自動車で参加</button>
+      <button data-role="spectator" class="secondary">観戦</button>
+    </div>
+  </div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

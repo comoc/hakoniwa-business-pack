@@ -248,6 +248,7 @@ Recipe固有ライフサイクルを実装する場合も、このディレク�
 - `ros2_bridge_examples.py`
 - `hakoniwa_conductor.py`
 - `hakoniwa_conductor_time_sync.py`
+- `mutual_view_driving.py`
 
 ## Hakoniwa Conductor binary package
 

@@ -1,0 +1,22 @@
+{
+  "paths": [
+    {
+      "id": "mutual-view-vehicle",
+      "path": "mutual-view-pdutypes.json"
+    }
+  ],
+  "robots": [
+    {
+      "name": "Bike",
+      "pdutypes_id": "mutual-view-vehicle"
+    },
+    {
+      "name": "Car",
+      "pdutypes_id": "mutual-view-vehicle"
+    },
+    {
+      "name": "Oncoming",
+      "pdutypes_id": "mutual-view-vehicle"
+    }
+  ]
+}

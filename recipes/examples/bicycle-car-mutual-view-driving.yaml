@@ -1,0 +1,427 @@
+id: bicycle-car-mutual-view-driving
+title: Bicycle and Car Mutual-view Driving Simulator in the Browser
+recipe_version: 0.1
+
+goal:
+  user_request: >
+    自転車と自動車、それぞれのドライバーの立場で相手がどう見えているかが分かる運転シミュレーターを作る。
+    操作と可視化はブラウザ上の Three.js Web アプリ、統合シミュレーション環境はサーバ側の箱庭。
+    ユーザーAは自転車、ユーザーBはセダン・SUV・ミニバン・大型トラックを選べ、互いに相手の視点も PinP で見られる。
+    追加要求: 車が自転車の後方から来て追い抜くシナリオにし、追い抜きのタイミングで対向車（大型バス）が
+    来る場合と来ない場合を切り替えられるようにする。
+    追加要求: 車が自転車を追い越すときは側方間隔を 1 m 以上あけるルールとし、1 m 未満なら警告を出す。
+    交差点シナリオは削除し、追い越しシナリオだけにする。
+  description: >
+    Python plant assets (Bike, Car, and an Oncoming bus) integrate a
+    kinematic bicycle model under one Hakoniwa clock. A Python controller asset (driver gateway)
+    owns the single-host Conductor, paces
+    simulation time to wall-clock time, converts inputs from several browser clients into cmd
+    PDUs, reads pose/vel PDUs, detects contacts, and broadcasts one shared state over WebSocket.
+    Each browser renders the same Three.js world from its own driver eye and shows the partner's
+    driver eye as picture-in-picture, including the partner's cabin pillars, hood, and blind zones.
+    The single scenario is an overtake: the car comes from behind and overtakes the cyclist on a
+    two-lane road, and the gateway times an oncoming bus to meet the overtake when it is switched on
+    in the browser. Every browser warns while the lateral clearance during the overtake is below 1 m.
+
+feasibility:
+  status: partially_feasible
+  confidence: medium
+  rationale:
+    - hakoniwa-core-pro provides shared-memory PDUs, hako-cmd, the Python binding (hakopy), and a single-host Conductor.
+    - hakoniwa-pdu-python provides geometry_msgs converters and the background Launcher lifecycle.
+    - The Catalog has no bicycle, sedan, SUV, minivan, or truck dynamics; this Recipe supplies Recipe-owned kinematic models instead of physics bodies.
+    - Existing browser Recipes stream PDUs to one viewer through bridge components; multi-client browser control is not covered by a Catalog component, so the Recipe owns a WebSocket gateway asset.
+
+validation:
+  status: partially_verified
+  summary: >
+    On native Windows x64 (2026-10-21, re-run 2026-10-25, localhost) the unit tests passed, the
+    smoke (two clients, then two overtakes) passed, and a browser rendered the car view, the bike view, the partner PiP, the minimap,
+    and the visibility indicators. Two human participants on separate browsers, gamepad input,
+    macOS/Linux, and LAN use are not yet verified.
+  steps:
+    - id: kinematic_model_unit_tests
+      status: verified
+      evidence:
+        - repository: hakoniwalab/hakoniwa-business-pack
+          path: tools/recipe/test_mutual_view_driving.py
+          revision: local-validation-2026-10-25
+      notes:
+        - 45 tests cover the vehicle model, contact detection, gateway command arbitration, real-time pacing, the oncoming-bus timing and phases, the bicycle autopilot, passing clearance and the 1 m warning, smoke evaluation, and launcher generation.
+        - They pass both inside the Workspace (HAKONIWA_WORK_DIR set) and outside it.
+    - id: two_client_smoke
+      status: verified
+      evidence:
+        - repository: hakoniwalab/hakoniwa-business-pack
+          path: tools/recipe/mutual_view_driving.py
+          revision: local-validation-2026-10-25
+      notes:
+        - First part of the smoke command, on the overtake road. Two simultaneous WebSocket clients drove the bike about 8.1 m and the car about 6.6 m in 5 s; the car switched from sedan to truck at rest; status PASS.
+        - The first run (2026-10-21, on the former intersection world) failed because reading a never-written PDU raised ValueError (no metadata); assets now treat that as no data yet.
+    - id: overtake_oncoming_smoke
+      status: verified
+      evidence:
+        - repository: hakoniwalab/hakoniwa-business-pack
+          path: tools/recipe/assets/mutual_view_driving/smoke_client.py
+          revision: local-validation-2026-10-21
+      notes:
+        - Gateway, BikePlant, CarPlant, and OncomingPlant on one Conductor; a car client overtook the autopilot bicycle at about 50 km/h with about 0.44 m minimum lateral clearance.
+        - Oncoming on - the bus was at x=-1.8 when the car passed the bicycle at x=-2.8 (meeting at the overtake).
+        - Oncoming off (switched at runtime in the same session, then reset) - the bus stayed at its spawn.
+        - Re-run 2026-10-25 after the two-client part; the car client switched back to a sedan before overtaking. Oncoming on - bus at x=0.8 while the car was beside the bicycle at x=4.6; minimum clearance 0.44 m at about 50 km/h (below the 1 m rule; the scripted driver passes close on purpose). Oncoming off - the bus stayed at x=130.
+        - The first attempt failed because the bus spawned 230 m away and could not reach the overtake even at 60 km/h; it now spawns at x=130, still beyond the 170 m fog from the car.
+    - id: browser_overtake
+      status: verified
+      notes:
+        - Chrome (spectator, car main view) showed the cyclist ahead and the bus approaching in the oncoming lane before the overtake, then the scenario panel reported the last overtake (minimum clearance, speed, oncoming bus).
+        - 2026-10-25 - while the scripted car passed at 0.46 m, the spectator page showed the red warning for a clearance under 1 m; after the pass the panel marked the 0.44 m minimum as a violation.
+    - id: browser_mutual_view
+      status: verified
+      notes:
+        - Chrome rendered the car driver view (right-hand A-pillar, dashboard) with the bike PiP, and the spectator view of bike and car with both indicators reporting visible (observed on the former intersection world, removed 2026-10-25).
+        - With the truck stopped near the bicycle, the truck PiP showed the bicycle almost hidden below the cab front.
+        - Driving was scripted through WebSocket clients; interactive keyboard driving by two people was not exercised.
+    - id: two_human_participants
+      status: not_tested
+      notes:
+        - Two people on separate browser windows or PCs driving at the same time.
+
+agency_boundary:
+  agent_actions:
+    - id: run_simulation
+      description: Configure, start, smoke-test, and stop the simulation-only composition on localhost.
+      autonomous: true
+      preconditions:
+        - user_requested_execution
+  human_decisions:
+    - id: expose_on_network
+      description: Decide whether to bind the gateway and web server to a LAN address; there is no authentication.
+      status: required
+      required_before:
+        - multi_pc_use
+    - id: accept_model_fidelity
+      description: Decide whether kinematic vehicles, box-shaped cabins, and the synthetic overtake road are sufficient for the intended training or evaluation.
+      status: required
+      required_before:
+        - customer_acceptance
+  human_actions: []
+  required_permissions: []
+  notes:
+    - The browser loads Three.js from cdn.jsdelivr.net, so the browser needs internet access unless the module is vendored.
+
+constraints:
+  - simulation-only
+  - single-host
+  - localhost-by-default
+  - kinematic-vehicle-models
+  - no-new-pdu-types
+
+target_environment:
+  required_for: executable-demo
+  status: partially_known
+  os: macOS | Linux | Windows
+  architecture: arm64 | x86_64 | x64
+  execution_mode: native
+  runtimes:
+    - name: Python
+      required: true
+      version: "3.12"
+      path: work/foundation/install/python
+    - name: Web browser with WebGL and ES modules
+      required: true
+      version: unknown
+      path: unknown
+  hakoniwa:
+    install_prefix: work/foundation/install
+    components_built:
+      - hakoniwa-core-pro
+      - hakoniwa-pdu-python
+
+execution_environment:
+  required_for: executable-demo
+  status: specified
+  workspace:
+    mode: managed
+  gui:
+    required: true
+    status: browser
+  shared_memory:
+    required: true
+    access: required-for-hakoniwa-runtime
+  python:
+    environment: foundation-venv
+    path: work/foundation/install/python
+    version: "3.12"
+    hakopy_available: true
+  hakoniwa:
+    install_prefix: work/foundation/install
+    hako_cmd_access: requires-unsandboxed-command
+  notes:
+    - Run the runner inside the Workspace (tools/workspace.py enter or run) so hako-cmd is on PATH.
+    - Logs, the staged app, the Launcher session, and smoke results stay under work/recipes/bicycle-car-mutual-view-driving/.
+
+foundation_contract:
+  mode: required
+  reason: The plants and the gateway are hakopy assets that need Core shared memory, hako-cmd, and the Foundation Launcher.
+
+foundation_requirements:
+  hakoniwa-core-pro:
+    capabilities:
+      shared_memory: true
+      hako_cmd: true
+      python_binding: true
+  hakoniwa-pdu-python:
+    version:
+      min: 1.6.8
+    capabilities:
+      hako_launcher: true
+      launcher_background_lifecycle: true
+      shm_backend: true
+
+runtime_dependencies:
+  python:
+    interpreter: work/foundation/install/python
+    requirements: recipes/requirements/bicycle-car-mutual-view-driving.txt
+    packages:
+      - name: websockets
+        version: ">=13.0"
+        purpose: Multi-client WebSocket server in the driver gateway asset.
+      - name: pydantic
+        version: ">=2.7.0"
+        purpose: Validate the hakoniwa-pdu-python Launcher configuration.
+
+process_topology:
+  - name: driver_gateway
+    owner: tools/recipe/assets/mutual_view_driving/driver_gateway.py
+    role: Conductor owner, CONTROLLER asset, WebSocket server (default ws://127.0.0.1:8771)
+  - name: bike_plant
+    owner: tools/recipe/assets/mutual_view_driving/vehicle_plant.py --role bike
+    role: PLANT asset for the bicycle
+  - name: car_plant
+    owner: tools/recipe/assets/mutual_view_driving/vehicle_plant.py --role car
+    role: PLANT asset for the selected car profile
+  - name: oncoming_plant
+    owner: tools/recipe/assets/mutual_view_driving/vehicle_plant.py --role oncoming
+    role: PLANT asset for the scenario bus
+  - name: web_server
+    owner: tools/recipe/viewer_http_server.py
+    role: Static Three.js app (default http://127.0.0.1:8770)
+
+components:
+  - id: hakoniwa-core-pro
+    roles:
+      - simulation_core
+      - time_sync
+      - control_plane
+    purpose: Shared-memory PDUs, asset lifecycle, Conductor, and hako-cmd start/stop.
+  - id: hakoniwa-pdu-python
+    roles:
+      - language_binding
+      - control_plane
+    purpose: geometry_msgs converters and the background Launcher used by the runner.
+  - id: hakoniwa-pdu-registry
+    roles:
+      - data_model
+    purpose: Existing geometry_msgs/Twist and geometry_msgs/Vector3 PDU types; no new types are generated.
+
+connections:
+  - from: hakoniwa-pdu-python
+    to: hakoniwa-core-pro
+    interface: pdu
+    data:
+      - Bike/cmd, Car/cmd, Oncoming/cmd (Twist)
+      - Car/profile (Vector3)
+      - Bike/pose, Bike/vel, Car/pose, Car/vel, Oncoming/pose, Oncoming/vel (Twist)
+    contract:
+      status: verified
+      requires:
+        - All assets register the same compact PDU definition.
+        - Exactly one process (driver_gateway) starts the Conductor.
+      validation_notes:
+        - Field mapping is documented in vehicle_plant.py and driver_gateway.py.
+
+data_flow:
+  summary: >
+    Browsers send driver inputs to the gateway over WebSocket. The gateway writes cmd PDUs each
+    simulation step, the plants integrate their vehicles and write pose/vel PDUs, and the gateway
+    broadcasts the shared state to every browser at 30 Hz.
+  steps:
+    - from: browser
+      to: driver_gateway
+      data:
+        - join / input / profile / respawn / scenario / reset JSON
+      description: Keyboard or Gamepad API input, sent at about 30 Hz; any participant can switch the oncoming bus and reset the scenario.
+    - from: driver_gateway
+      to: oncoming_plant / bike_plant
+      data:
+        - scenario cmd PDUs
+      description: >
+        The bus waits beyond the fog until the car starts, then its speed is
+        recomputed every step from the predicted point and time at which the car catches the cyclist
+        (8 to 60 km/h). An unoccupied bicycle rides on autopilot at about 16 km/h after the car starts.
+    - from: driver_gateway
+      to: bike_plant / car_plant
+      data:
+        - cmd and profile PDUs
+      description: Inputs older than 1 s become a light brake; a new contact holds full brake for 1.5 s.
+    - from: bike_plant / car_plant
+      to: driver_gateway
+      data:
+        - pose and vel PDUs
+      description: Kinematic bicycle model at 20 ms steps.
+    - from: driver_gateway
+      to: browser
+      data:
+        - state JSON (vehicles, contacts, occupancy, scenario phase, passing clearance, speed, and the 1 m warning)
+      description: Each browser renders its own driver eye and the partner's driver eye (PiP).
+
+time_model:
+  mode: shared-simulation-time
+  components:
+    - hakoniwa-core-pro
+  notes:
+    - The gateway sleeps whenever simulation time runs ahead of wall-clock time, so driving is real time.
+
+artifact_sets:
+  runtime_artifacts:
+    description: Recipe-owned assets, PDU definition, world, and browser app.
+    status: partially_verified
+    artifacts:
+      - tools/recipe/assets/mutual_view_driving/vehicles.py
+      - tools/recipe/assets/mutual_view_driving/vehicle_plant.py
+      - tools/recipe/assets/mutual_view_driving/driver_gateway.py
+      - tools/recipe/assets/mutual_view_driving/world-overtake.json
+      - tools/recipe/assets/mutual_view_driving/config/mutual-view-pdudef-compact.json
+      - tools/recipe/assets/mutual_view_driving/web/index.html
+
+artifacts:
+  - name: Mutual-view PDU definition
+    kind: pdu-definition
+    producer: hakoniwa-business-pack
+    consumer:
+      - hakoniwa-core-pro
+    path: tools/recipe/assets/mutual_view_driving/config/mutual-view-pdudef-compact.json
+  - name: Overtake road
+    kind: world-definition
+    producer: hakoniwa-business-pack
+    consumer:
+      - driver_gateway
+      - browser
+    path: tools/recipe/assets/mutual_view_driving/world-overtake.json
+
+missing_pieces:
+  - Vehicle dynamics are kinematic; replace a plant with a MuJoCo or Robot Runtime vehicle by keeping the same cmd/pose/vel PDU contract.
+  - Cabins are simplified boxes and pillars; mirrors are not rendered as mirror views, so the car driver cannot check the cyclist in a mirror after passing.
+  - No authentication or session management for LAN or Internet use.
+  - One synthetic two-lane road only; PLATEAU or Environment Studio worlds are not connected yet.
+  - The bus timing assumes a straight road and a car that catches up; it does not model bus-driver reactions to a car in its lane.
+
+demo:
+  objective: >
+    A car driver overtakes a cyclist from behind, with or without an oncoming bus timed to the
+    overtake, while both see each other from their own eye and from the partner's eye.
+  steps:
+    - order: 1
+      id: configure
+      component: hakoniwa-business-pack
+      action: Install Recipe Python requirements and stage the app into the Recipe workspace.
+      command: python tools/recipe/mutual_view_driving.py configure
+      agency: agent_action
+    - order: 2
+      id: doctor
+      component: hakoniwa-business-pack
+      action: Check Foundation, app files, and Python imports.
+      command: python tools/recipe/mutual_view_driving.py doctor
+      agency: agent_action
+    - order: 3
+      id: smoke
+      component: hakoniwa-business-pack
+      action: Start the session, drive both roles from two WebSocket clients, overtake the autopilot bicycle with the oncoming bus on and then off, and stop.
+      command: python tools/recipe/mutual_view_driving.py smoke
+      agency: agent_action
+    - order: 4
+      id: start
+      component: hakoniwa-business-pack
+      action: >
+        Start the session (--oncoming on|off for the initial setting) and open the
+        printed bike and car URLs in two browser windows; switch the oncoming bus and reset from the
+        scenario panel.
+      command: python tools/recipe/mutual_view_driving.py start
+      agency: agent_action
+  readiness:
+    lifecycle_state:
+      source: Launcher session plus gateway and plant logs
+      required: RUNNING with gateway, both plants, and web server started before hako-cmd start
+      sufficient: false
+    checks:
+      - id: gateway_listening
+        kind: log
+        target: logs/driver_gateway.out
+        expected: driver gateway listening on ws://127.0.0.1:8771
+      - id: plants_registered
+        kind: log
+        target: logs/bike_plant.out and logs/car_plant.out
+        expected: BikePlant registered / CarPlant registered
+    operator_handoff:
+      background: true
+      explain_command_return: true
+      next_actions: [open the bike and car URLs, status, stop]
+  cleanup:
+    owner: Recipe Launcher session
+    provider: hakoniwa-pdu-python
+    mode: session-file
+    target: work/recipes/bicycle-car-mutual-view-driving/runtime/launcher-session.json
+    trigger: python tools/recipe/mutual_view_driving.py stop
+    expected_behavior:
+      - Invoke LauncherService.terminate through the control CLI.
+    verification_checks:
+      - Session state is TERMINATED.
+      - Ports 8770 and 8771 are released.
+    cautions:
+      - Do not kill arbitrary Python processes.
+  observability:
+    success_signals:
+      - Both browsers show the shared world and the partner vehicle moving in real time.
+      - The PiP shows the partner's eye height and cabin occlusion for each car profile.
+      - The HUD reports whether the partner can currently see you.
+      - A red warning appears while the car passes the bicycle with less than 1 m of lateral clearance.
+    failure_signals:
+      - "'hako-cmd' was not found: the runner was started outside the Workspace."
+      - A plant log shows asset_register failure.
+  verification_checks:
+    lifecycle:
+      - Gateway, plants, and web server start before hako-cmd start.
+    behavior:
+      - Smoke client reports PASS with both vehicles moving, the car on the truck profile, and two overtakes in which the bus meets the overtake only when it is switched on.
+    logs:
+      - logs/*.out and validation/smoke-result.json.
+
+expected_result: >
+  Two browser users drive a bicycle and a selectable car through the same Hakoniwa simulation and
+  can compare their own view with the partner's driver view while the car overtakes the bicycle,
+  including blind zones caused by the oncoming bus and the partner's own cabin, and are warned
+  when the car passes the bicycle with less than 1 m of lateral clearance.
+
+source_catalogs:
+  - component_id: hakoniwa-core-pro
+    catalog_path: ../catalog/components/hakoniwa-core-pro.yaml
+  - component_id: hakoniwa-pdu-python
+    catalog_path: ../catalog/components/hakoniwa-pdu-python.yaml
+  - component_id: hakoniwa-pdu-registry
+    catalog_path: ../catalog/components/hakoniwa-pdu-registry.yaml
+
+source_artifacts:
+  - repository: hakoniwalab/hakoniwa-business-pack
+    path: tools/recipe/assets/mutual_view_driving
+    revision: local
+    description: Recipe-owned assets, gateway, and browser app.
+
+tags:
+  - hakoniwa
+  - browser
+  - threejs
+  - multi-user
+  - road-safety
+  - bicycle
+  - vehicle
+  - perspective

@@ -1,0 +1,4 @@
+# Multi-client WebSocket server for the driver gateway (websockets.asyncio API).
+websockets>=13.0
+# Launcher configuration models used by hakoniwa-pdu-python.
+pydantic>=2.7.0
