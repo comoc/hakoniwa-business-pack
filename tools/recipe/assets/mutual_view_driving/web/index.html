@@ -36,6 +36,11 @@
       background: var(--accent); color: #002; font-weight: 700; cursor: pointer; }
     #lobby button.secondary { background: #3a4458; color: var(--text); }
     #profile-select { font-size: 14px; padding: 4px; margin-left: 6px; }
+    /* Aerial view: one chase camera from above; the driver HUD, PiP, and minimap are not used. */
+    body.aerial #hud, body.aerial #pip-frame, body.aerial #pip-label, body.aerial #map-frame,
+    body.aerial #contact { display: none !important; }
+    #aerial-legend { left: 16px; top: 16px; font-size: 13px; line-height: 1.7; }
+    #aerial-legend i { display: inline-block; width: 22px; height: 4px; margin-right: 6px; vertical-align: middle; }
     #status { left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 13px; }
     #scenario { left: 50%; top: 16px; transform: translateX(-50%); font-size: 14px; text-align: center;
       max-width: 26vw; }
@@ -48,6 +53,8 @@
     #passing-warning { margin-top: 6px; padding: 6px 12px; border-radius: 6px; background: #c62828; color: #fff;
       font-size: 18px; font-weight: 700; }
     #passing-last.violation { color: #ff8a80; font-weight: 700; }
+    #demo-status { margin-top: 6px; padding: 4px 10px; border-radius: 6px; background: #1565c0; color: #fff;
+      font-size: 14px; font-weight: 700; }
   </style>
   <script type="importmap">
     { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js" } }
@@ -68,6 +75,7 @@
       <button id="oncoming-toggle" hidden>対向バス: -</button>
       <button id="reset-scenario" class="secondary">シナリオをリセット</button>
     </div>
+    <div id="demo-status" hidden></div>
     <div id="oncoming-phase" class="line"></div>
     <div id="passing-now" class="line"></div>
     <div id="passing-warning" hidden></div>
@@ -77,10 +85,18 @@
   <div id="pip-label">相手の視点</div>
   <div id="map-frame"></div>
   <div id="contact" class="panel">接触！</div>
+  <div id="aerial-legend" class="panel" hidden>
+    <b>上空ビュー</b><br>
+    <i style="background:#e53935"></i>自動車の軌跡<br>
+    <i style="background:#2e7d32"></i>自転車の軌跡<br>
+    <i style="background:#1e88e5"></i>対向バスの軌跡<br>
+    <i style="background:#26c6da"></i>側方間隔（1 m 未満は赤）
+  </div>
   <div id="help" class="panel">
     <kbd>W</kbd>/<kbd>↑</kbd> 加速　<kbd>S</kbd>/<kbd>↓</kbd> ブレーキ（停止中は後退）<br>
     <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> ハンドル　<kbd>Q</kbd><kbd>E</kbd> 左右を見る（自転車は後方確認まで）　<kbd>C</kbd> 正面<br>
     <kbd>V</kbd> メインと PiP を入れ替え　<kbd>R</kbd> スタート位置へ戻る<br>
+    <kbd>1</kbd> デモ（対向バスなし）　<kbd>2</kbd> デモ（対向バスあり）　<kbd>Esc</kbd> デモ中止<br>
     ゲームパッド: 左スティック ハンドル / R2 加速 / L2 ブレーキ / 右スティック 視線
   </div>
   <div id="status" class="panel">接続中…</div>
@@ -92,6 +108,7 @@
       <button data-role="bike">自転車で参加</button>
       <button data-role="car">自動車で参加</button>
       <button data-role="spectator" class="secondary">観戦</button>
+      <button data-role="spectator" data-view="aerial" class="secondary">上空から見る</button>
     </div>
   </div>
   <script type="module" src="./app.js"></script>

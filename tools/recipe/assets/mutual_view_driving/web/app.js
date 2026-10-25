@@ -9,6 +9,7 @@ const LABEL = { bike: "自転車", car: "自動車", spectator: "観戦" };
 const params = new URLSearchParams(location.search);
 const wsUrl = params.get("ws") ?? `ws://${location.hostname || "127.0.0.1"}:8771`;
 let myRole = params.get("role");
+let aerial = params.get("view") === "aerial"; // spectator watching the overtake from above
 let swapped = false;
 
 const $ = (id) => document.getElementById(id);
@@ -95,8 +96,10 @@ function buildWorld(world, profiles) {
     const tex = texture.clone();
     tex.repeat.set(Math.max(1, Math.round(width / 4)), Math.max(1, Math.round(bld.height / 3.5)));
     tex.needsUpdate = true;
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, bld.height, depth),
-      new THREE.MeshLambertMaterial({ color: bld.color, map: tex }));
+    // Windows only on the walls; the roof and the underside are plain (box faces: +x, -x, +y, -y, +z, -z).
+    const wall = new THREE.MeshLambertMaterial({ color: bld.color, map: tex });
+    const roof = new THREE.MeshLambertMaterial({ color: new THREE.Color(bld.color).multiplyScalar(0.8) });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, bld.height, depth), [wall, wall, roof, roof, wall, wall]);
     mesh.position.copy(w2t((bld.x0 + bld.x1) / 2, (bld.y0 + bld.y1) / 2, bld.height / 2));
     scene.add(mesh);
     staticOccluders.push(mesh);
@@ -208,6 +211,148 @@ function canSee(viewer, target) {
   return false;
 }
 
+// ---------------------------------------------------------------- aerial view
+// A chase camera behind and above the pair, trails of every road user, and the side gap while passing.
+const aerialCamera = new THREE.PerspectiveCamera(50, 16 / 9, 0.5, 1500);
+aerialCamera.layers.enable(RIDER_LAYER);
+const aerialAim = { target: null, position: null };
+const TRAIL_HALF_WIDTH = 0.15;
+
+class Trail {
+  constructor(color, max = 4000) {
+    this.max = max;
+    this.count = 0;
+    this.last = null;
+    this.positions = new Float32Array(max * 2 * 3);
+    const index = [];
+    for (let i = 0; i < max - 1; i++) {
+      const a = 2 * i;
+      index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+    this.geometry = new THREE.BufferGeometry();
+    this.geometry.setAttribute("position", new THREE.BufferAttribute(this.positions, 3));
+    this.geometry.setIndex(index);
+    this.geometry.setDrawRange(0, 0);
+    this.mesh = new THREE.Mesh(this.geometry, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+    this.mesh.frustumCulled = false;
+    scene.add(this.mesh);
+  }
+
+  clear() {
+    this.count = 0;
+    this.last = null;
+    this.geometry.setDrawRange(0, 0);
+  }
+
+  add(x, y) {
+    if (this.last) {
+      const step = Math.hypot(x - this.last.x, y - this.last.y);
+      if (step < 0.4) return;
+      if (step > 5) this.clear(); // respawn or scenario reset: start a new trail
+    }
+    if (this.count >= this.max) this.clear();
+    const from = this.last ?? { x: x - 0.01, y };
+    const length = Math.hypot(x - from.x, y - from.y) || 1;
+    const nx = (-(y - from.y) / length) * TRAIL_HALF_WIDTH, ny = ((x - from.x) / length) * TRAIL_HALF_WIDTH;
+    w2t(x + nx, y + ny, 0.04).toArray(this.positions, this.count * 6);
+    w2t(x - nx, y - ny, 0.04).toArray(this.positions, this.count * 6 + 3);
+    this.count += 1;
+    this.last = { x, y };
+    this.geometry.attributes.position.needsUpdate = true;
+    this.geometry.setDrawRange(0, Math.max(0, (this.count - 1) * 6));
+  }
+}
+
+function textSprite() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 96;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
+  sprite.scale.set(4, 1.5, 1);
+  sprite.renderOrder = 10;
+  sprite.userData = { canvas, texture, text: null };
+  return sprite;
+}
+
+function setSpriteText(sprite, text, color) {
+  const data = sprite.userData;
+  if (data.text === text + color) return;
+  data.text = text + color;
+  const g = data.canvas.getContext("2d");
+  g.clearRect(0, 0, 256, 96);
+  g.fillStyle = "rgba(16, 20, 28, 0.8)";
+  g.beginPath();
+  g.roundRect(8, 12, 240, 72, 14);
+  g.fill();
+  g.fillStyle = color;
+  g.font = "bold 44px system-ui, sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(text, 128, 50);
+  data.texture.needsUpdate = true;
+}
+
+const trails = {};
+const gapBar = new THREE.Mesh(new THREE.PlaneGeometry(1, 0.3).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0x26c6da, side: THREE.DoubleSide, depthTest: false }));
+gapBar.renderOrder = 9;
+const gapLabel = textSprite();
+gapBar.visible = gapLabel.visible = false;
+scene.add(gapBar, gapLabel);
+
+function updateAerial(dt) {
+  for (const [role, user, color] of [["car", users.car, 0xe53935], ["bike", users.bike, 0x2e7d32],
+    ["oncoming", oncoming, 0x1e88e5]]) {
+    if (!user?.shown) continue;
+    trails[role] ??= new Trail(color);
+    trails[role].add(user.shown.x, user.shown.y);
+  }
+  const car = users.car.shown, bike = users.bike.shown;
+  if (!car || !bike) return;
+  // Frame both: aim at their midpoint from behind the cyclist's heading, higher when they are far apart.
+  const mid = { x: (car.x + bike.x) / 2, y: (car.y + bike.y) / 2 };
+  const apart = Math.hypot(car.x - bike.x, car.y - bike.y);
+  const height = Math.min(90, Math.max(22, 14 + 0.6 * apart));
+  const back = height * 0.9, side = -height * 0.3; // behind and a little to the overtaking side
+  const cos = Math.cos(bike.yaw), sin = Math.sin(bike.yaw);
+  const target = w2t(mid.x, mid.y, 0);
+  const position = w2t(mid.x - back * cos - side * sin, mid.y - back * sin + side * cos, height);
+  const k = aerialAim.target ? Math.min(1, dt * 3) : 1;
+  aerialAim.target = aerialAim.target ? aerialAim.target.lerp(target, k) : target;
+  aerialAim.position = aerialAim.position ? aerialAim.position.lerp(position, k) : position;
+  aerialCamera.position.copy(aerialAim.position);
+  aerialCamera.lookAt(aerialAim.target);
+
+  // Side gap measured across the cyclist's heading, from the bicycle's edge to the car's edge.
+  const passing = latest?.passing ?? {};
+  const show = Boolean(passing.active && users.car.profile && users.bike.profile);
+  gapBar.visible = gapLabel.visible = show;
+  if (!show) return;
+  const n = { x: -sin, y: cos };
+  const lateral = (car.x - bike.x) * n.x + (car.y - bike.y) * n.y;
+  const sign = Math.sign(lateral) || -1;
+  const bikeEdge = (sign * users.bike.profile.width) / 2;
+  const carEdge = lateral - (sign * users.car.profile.width) / 2;
+  const a = w2t(bike.x + n.x * bikeEdge, bike.y + n.y * bikeEdge, 0.08);
+  const b = w2t(bike.x + n.x * carEdge, bike.y + n.y * carEdge, 0.08);
+  gapBar.position.copy(a).add(b).multiplyScalar(0.5);
+  gapBar.scale.x = Math.max(0.05, a.distanceTo(b));
+  gapBar.rotation.y = Math.atan2(-(b.z - a.z), b.x - a.x);
+  const ok = passing.gap >= (passing.min_clearance_m ?? 1.0);
+  gapBar.material.color.set(ok ? 0x26c6da : 0xe53935);
+  gapLabel.position.copy(gapBar.position).add(new THREE.Vector3(0, 2.2, 0));
+  setSpriteText(gapLabel, `${passing.gap.toFixed(2)} m`, ok ? "#80deea" : "#ff8a80");
+}
+
+function setAerial(on) {
+  aerial = on;
+  document.body.classList.toggle("aerial", on);
+  $("aerial-legend").hidden = !on;
+  for (const trail of Object.values(trails)) trail.mesh.visible = on;
+}
+
 // ---------------------------------------------------------------- HUD, PiP, minimap
 const mapCamera = new THREE.OrthographicCamera(-30, 30, 30, -30, 1, 200);
 mapCamera.up.set(0, 0, -1); // north (world +y, three -z) at the top
@@ -246,6 +391,8 @@ function updateHud(now) {
 }
 
 const PHASE_LABEL = { waiting: "待機中（車が走り出すと接近）", approaching: "接近中", leaving: "通過", finished: "終了（リセットで再開）" };
+const DEMO_LABEL = { approach: "自転車に近づく", wait: "対向車が過ぎるまで後ろで待つ", pass: "1 m 以上あけて追い越し中",
+  return: "車線に戻る", stopping: "停止中", done: "終了" };
 
 function updateScenarioPanel() {
   const scenario = latest.scenario ?? {};
@@ -256,6 +403,10 @@ function updateScenarioPanel() {
   toggle.classList.toggle("off", !scenario.oncoming_enabled);
   $("oncoming-phase").textContent = scenario.has_oncoming && scenario.oncoming_enabled
     ? `バス: ${PHASE_LABEL[scenario.phase] ?? scenario.phase}` : "";
+  const demo = scenario.demo ?? {};
+  $("demo-status").hidden = !demo.active;
+  $("demo-status").textContent = demo.active
+    ? `デモ（対向バス${demo.oncoming ? "あり" : "なし"}）: ${DEMO_LABEL[demo.phase] ?? demo.phase}　Esc で中止` : "";
   const passing = latest.passing ?? {};
   const fmt = (gap) => (gap === null || gap === undefined ? "-" : `${gap.toFixed(2)} m`);
   $("passing-now").textContent = passing.active ? `追い抜き中: 側方間隔 ${fmt(passing.gap)}（最小 ${fmt(passing.min_gap)}）` : "";
@@ -310,6 +461,15 @@ function frame(now) {
   previous = now;
   for (const user of Object.values(users)) user.update(dt);
   oncoming?.update(dt);
+  if (aerial) {
+    updateAerial(dt);
+    const W = innerWidth, H = innerHeight;
+    renderer.setScissorTest(true);
+    renderView(aerialCamera, { x: 0, y: 0, w: W, h: H }, H);
+    if (latest) updateScenarioPanel();
+    requestAnimationFrame(frame);
+    return;
+  }
   const { W, H, pip, map } = layout();
   const mainRole = myRole in users ? myRole : "bike";
   const [mainUser, pipUser] = swapped ? [users[partnerOf(mainRole)], users[mainRole]]
@@ -337,6 +497,9 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyV") swapped = !swapped;
   if (e.code === "KeyR") send({ type: "respawn" });
   if (e.code === "KeyC") control.look = 0;
+  if (e.code === "Digit1" || e.code === "Numpad1") send({ type: "demo", oncoming: false });
+  if (e.code === "Digit2" || e.code === "Numpad2") send({ type: "demo", oncoming: true });
+  if (e.code === "Escape") send({ type: "demo", stop: true });
   if (e.code.startsWith("Arrow")) e.preventDefault();
 });
 addEventListener("keyup", (e) => keys.delete(e.code));
@@ -403,7 +566,7 @@ function onWelcome(message) {
     worldBuilt = true;
   }
   myRole = message.role;
-  statusEl.textContent = `${LABEL[myRole] ?? myRole} として参加中 — ${wsUrl}`;
+  statusEl.textContent = `${aerial ? "上空ビュー" : LABEL[myRole] ?? myRole} として参加中 — ${wsUrl}`;
   const select = $("profile-select");
   select.hidden = myRole !== "car";
   if (myRole === "car" && select.options.length === 0) {
@@ -451,6 +614,8 @@ if (!myRole) {
     button.addEventListener("click", () => {
       myRole = button.dataset.role;
       params.set("role", myRole);
+      if (button.dataset.view) params.set("view", button.dataset.view);
+      setAerial(button.dataset.view === "aerial");
       history.replaceState(null, "", `?${params}`);
       $("lobby").hidden = true;
       send({ type: "join", role: myRole });
@@ -458,5 +623,6 @@ if (!myRole) {
   }
 }
 
+setAerial(aerial);
 connect();
 requestAnimationFrame(frame);

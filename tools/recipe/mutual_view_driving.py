@@ -76,6 +76,7 @@ def urls(args: argparse.Namespace) -> dict[str, str]:
     return {
         "bike": f"{page}?role=bike&ws={ws}",
         "car": f"{page}?role=car&ws={ws}",
+        "aerial": f"{page}?role=spectator&view=aerial&ws={ws}",
         "websocket": ws,
     }
 

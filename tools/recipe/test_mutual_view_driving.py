@@ -306,6 +306,85 @@ class PassingMonitorTest(unittest.TestCase):
         self.assertIsNone(info["last"])
 
 
+def simulate_demo(profile_id: str, oncoming: bool, limit_sec: float = 90.0) -> dict:
+    """Closed-loop kinematic run of the demo driver against the oncoming-bus scenario."""
+    s = OVERTAKE["spawn"]
+    car = vehicles.VehicleState(s["car"]["x"], s["car"]["y"], s["car"]["yaw"])
+    bike = vehicles.VehicleState(s["bike"]["x"], s["bike"]["y"], s["bike"]["yaw"])
+    bus_spawn = vehicles.VehicleState(s["oncoming"]["x"], s["oncoming"]["y"], s["oncoming"]["yaw"])
+    bus = bus_spawn
+    demo = driver_gateway.DemoDriver(OVERTAKE, oncoming)
+    scenario = driver_gateway.OncomingScenario(OVERTAKE["scenario"]["oncoming"], s["oncoming"], OVERTAKE["bounds"])
+    monitor = driver_gateway.PassingMonitor()
+    phases, contacts, t = [], set(), 0.0
+    as_dict = lambda state, profile: {"x": state.x, "y": state.y, "yaw": state.yaw, "speed": state.speed,
+                                      "profile": profile}
+    while demo.phase != "done" and t < limit_sec:
+        states = {"car": as_dict(car, profile_id), "bike": as_dict(bike, "bicycle"), "oncoming": as_dict(bus, "bus")}
+        found = driver_gateway.detect_contacts(OVERTAKE, states)
+        contacts.update((role, kind) for role, kind in found.items() if kind)
+        threat = oncoming and scenario.phase in ("waiting", "approaching")
+        bike_command, car_command = demo.step(states["car"], states["bike"], states["oncoming"], threat)
+        bus_command = scenario.step(oncoming, states, found.get("oncoming"))
+        monitor.update(states["car"], states["bike"], states["oncoming"])
+        if not phases or phases[-1] != demo.phase:
+            phases.append(demo.phase)
+        car = vehicles.step(vehicles.PROFILES[profile_id], car, *car_command)
+        bike = vehicles.step(vehicles.PROFILES["bicycle"], bike, *bike_command)
+        bus = bus_spawn if bus_command[3] else vehicles.step(vehicles.PROFILES["bus"], bus, *bus_command[:3])
+        t += vehicles.DT_SEC
+    return {"phases": phases, "last": monitor.last, "contacts": contacts, "car": car}
+
+
+class DemoTest(unittest.TestCase):
+    def test_every_car_overtakes_with_at_least_one_metre_and_no_contact(self):
+        for profile_id in vehicles.CAR_PROFILE_IDS:
+            for oncoming in (False, True):
+                with self.subTest(profile=profile_id, oncoming=oncoming):
+                    run = simulate_demo(profile_id, oncoming)
+                    self.assertEqual(run["phases"][-1], "done")
+                    self.assertIn("pass", run["phases"])
+                    self.assertEqual(run["contacts"], set())
+                    self.assertGreaterEqual(run["last"]["min_gap"], driver_gateway.PassingMonitor.MIN_CLEARANCE_M)
+                    # Back in the car lane at the end.
+                    self.assertAlmostEqual(run["car"].y, OVERTAKE["spawn"]["car"]["y"], delta=0.3)
+
+    def test_with_the_bus_the_car_waits_and_passes_after_it(self):
+        run = simulate_demo("sedan", True)
+        self.assertEqual(run["phases"][:2], ["wait", "pass"])
+        self.assertFalse(run["last"]["oncoming_near"])
+
+    def test_pass_line_keeps_the_target_clearance_for_each_width(self):
+        demo = driver_gateway.DemoDriver(OVERTAKE, False)
+        bike = vehicles.PROFILES["bicycle"]
+        for profile_id in vehicles.CAR_PROFILE_IDS:
+            profile = vehicles.PROFILES[profile_id]
+            lateral = demo.pass_lateral(profile, 0.95)
+            self.assertAlmostEqual(0.95 - lateral - (bike.width + profile.width) / 2, demo.TARGET_CLEARANCE_M)
+
+    def test_far_bus_or_no_threat_is_clear(self):
+        demo = driver_gateway.DemoDriver(OVERTAKE, True)
+        car, bike = pose(-60.0, 1.6, speed=11.1), pose(-40.0, 2.55, speed=4.5, profile="bicycle")
+        near_bus = pose(40.0, -1.6, math.pi, 8.0, "bus")
+        self.assertFalse(demo.oncoming_clear(car, bike, near_bus, True))
+        self.assertTrue(demo.oncoming_clear(car, bike, near_bus, False))
+        self.assertTrue(demo.oncoming_clear(car, bike, pose(-80.0, -1.6, math.pi, 8.0, "bus"), True))
+
+    def test_demo_messages_are_open_to_everyone(self):
+        shared = driver_gateway.Shared(OVERTAKE)
+        shared.apply_message("spectator", {"type": "demo", "oncoming": True}, 1.0)
+        self.assertEqual(shared.demo_request, {"oncoming": True})
+        shared.apply_message("bike", {"type": "demo", "stop": True}, 1.0)
+        self.assertEqual(shared.demo_request, {"stop": True})
+
+    def test_demo_override_ignores_driver_input_but_not_the_respawn_hold(self):
+        shared = driver_gateway.Shared(OVERTAKE)
+        shared.apply_message("car", {"type": "input", "throttle": 1.0}, 10.0)
+        self.assertEqual(shared.command("car", 10.1, override=(0.2, 0.0, 0.3)), (0.2, 0.0, 0.3, 0.0))
+        shared.respawn_until["car"] = 11.0
+        self.assertEqual(shared.command("car", 10.5, override=(0.2, 0.0, 0.3)), driver_gateway.HOLD)
+
+
 class PacingTest(unittest.TestCase):
     def gateway(self):
         args = argparse.Namespace(world=str(APP / "world-overtake.json"), host="127.0.0.1", port=0, delta_usec=20000)
@@ -357,6 +436,17 @@ class SmokeEvaluationTest(unittest.TestCase):
     def test_overtake_fails_when_the_switch_is_ignored(self):
         runs = [self.overtake_run(True, False, 20.0), self.overtake_run(False, False, 100.0)]
         self.assertEqual(len(smoke_client.evaluate_overtake(runs)), 2)
+
+    def demo_run(self, oncoming: bool, min_gap: float, phases: list[str]) -> dict:
+        return {"oncoming": oncoming, "phases": phases, "contacts": [], "finished": True,
+                "passing": {"min_gap": min_gap, "speed_kmh": 40.0, "oncoming_near": False}, "min_clearance_m": 1.0}
+
+    def test_demo_pass_requires_clearance_and_waiting_for_the_bus(self):
+        runs = [self.demo_run(False, 1.4, ["approach", "pass", "return", "stopping"]),
+                self.demo_run(True, 1.4, ["wait", "pass", "return", "stopping"])]
+        self.assertEqual(smoke_client.evaluate_demo(runs), [])
+        runs = [self.demo_run(False, 0.8, ["approach", "pass"]), self.demo_run(True, 1.4, ["approach", "pass"])]
+        self.assertEqual(len(smoke_client.evaluate_demo(runs)), 2)
 
     def test_overtake_driver_moves_towards_the_centre_line_beside_the_bicycle(self):
         bike = pose(0.0, 2.55, profile="bicycle")
@@ -414,6 +504,8 @@ class RunnerTest(unittest.TestCase):
         urls = recipe.urls(self.args(host="127.0.0.1", http_port=9000, ws_port=9001))
         self.assertEqual(urls["bike"], "http://127.0.0.1:9000/index.html?role=bike&ws=ws://127.0.0.1:9001")
         self.assertIn("role=car", urls["car"])
+        self.assertEqual(urls["aerial"],
+                         "http://127.0.0.1:9000/index.html?role=spectator&view=aerial&ws=ws://127.0.0.1:9001")
 
     def test_app_sources_exist(self):
         for name in recipe.APP_FILES:

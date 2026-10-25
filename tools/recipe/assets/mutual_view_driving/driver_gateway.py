@@ -13,6 +13,7 @@ Browser -> gateway (JSON):
   {"type": "respawn"}
   {"type": "scenario", "oncoming": true | false}                     (any participant)
   {"type": "reset"}                                                  (any participant)
+  {"type": "demo", "oncoming": true | false} / {"type": "demo", "stop": true}   (any participant)
 Gateway -> browser (JSON):
   {"type": "welcome", "world": {...}, "profiles": [...], "role": ...}
   {"type": "state", "t": sim_sec, "bike": {...}, "car": {...}, "oncoming": {...} | absent,
@@ -92,6 +93,7 @@ class Shared:
         self.occupied = {role: 0 for role in USERS}
         self.oncoming_enabled = oncoming_enabled
         self.reset_requested = False
+        self.demo_request: dict | None = None
         self.snapshot: dict | None = None
 
     def apply_message(self, role: str | None, message: dict, now: float) -> None:
@@ -103,6 +105,10 @@ class Shared:
                 return
             if kind == "reset":
                 self.reset_requested = True
+                return
+            if kind == "demo":
+                self.demo_request = ({"stop": True} if message.get("stop")
+                                     else {"oncoming": bool(message.get("oncoming"))})
                 return
             if role not in USERS:
                 return
@@ -119,18 +125,20 @@ class Shared:
             elif kind == "profile" and role == "car" and message.get("id") in vehicles.CAR_PROFILE_IDS:
                 self.car_profile = message["id"]
 
-    def command(self, role: str, now: float,
-                fallback: tuple[float, float, float] | None = None) -> tuple[float, float, float, float]:
+    def command(self, role: str, now: float, fallback: tuple[float, float, float] | None = None,
+                override: tuple[float, float, float] | None = None) -> tuple[float, float, float, float]:
         """(throttle, brake, steer, respawn) to send to a plant.
 
         `fallback` drives the vehicle when nobody has sent input recently (autopilot);
-        otherwise a stale input becomes a light brake.
+        otherwise a stale input becomes a light brake. `override` (the demo) ignores input.
         """
         with self.lock:
             if now < self.respawn_until[role]:
                 return HOLD
             if now < self.contact_until[role]:
                 return 0.0, 1.0, 0.0, 0.0
+            if override is not None:
+                return (*override, 0.0)
             data = self.inputs[role]
             if now - data["at"] > INPUT_TIMEOUT_SEC:
                 return (*fallback, 0.0) if fallback else (0.0, 0.3, 0.0, 0.0)
@@ -280,6 +288,111 @@ class PassingMonitor:
                 "last": self.last}
 
 
+class DemoDriver:
+    """Scripted run for the demo keys: the bicycle cruises, the car overtakes it with 1 m+ clearance.
+
+    approach  cruise in the car lane towards the bicycle
+    wait      follow the bicycle while an oncoming vehicle would meet the overtake
+    pass      move out to the clearance line and overtake
+    return    back to the car lane once clearly ahead
+    stopping  both vehicles brake to a stop; then the demo hands control back (done)
+    """
+
+    CRUISE_SPEED = 11.1  # m/s, 40 km/h
+    TARGET_CLEARANCE_M = 1.5  # aim above the 1 m rule: the truck swings back about 0.25 m after moving out
+    FOLLOW_GAP_M = 8.0  # bumper-to-wheel distance while waiting behind the bicycle
+    SHIFT_START_M = 30.0  # centre distance at which the car starts moving out
+    RETURN_MARGIN_M = 6.0
+    STOP_AHEAD_M = 30.0
+    ONCOMING_MARGIN_M = 30.0
+    LOOK_AHEAD_MIN_M, LOOK_AHEAD_SEC = 10.0, 1.5
+    MAX_HEADING = 0.15  # rad
+    STEER_GAIN = 4.0
+
+    def __init__(self, world: dict, oncoming: bool):
+        self.oncoming = oncoming
+        self.car_spawn = world["spawn"]["car"]
+        self.bike_spawn = world["spawn"]["bike"]
+        self.bike_speed = world.get("scenario", {}).get("bike_autopilot", {}).get("speed", 4.5)
+        self.phase = "approach"
+
+    def _frame(self, state: dict) -> tuple[float, float]:
+        """(along, lateral) in the car lane frame: origin at the car spawn, x along its heading."""
+        yaw0 = self.car_spawn["yaw"]
+        dx, dy = state["x"] - self.car_spawn["x"], state["y"] - self.car_spawn["y"]
+        return dx * math.cos(yaw0) + dy * math.sin(yaw0), -dx * math.sin(yaw0) + dy * math.cos(yaw0)
+
+    def pass_lateral(self, car_profile: vehicles.Profile, bike_lateral: float) -> float:
+        bike = vehicles.PROFILES["bicycle"]
+        return bike_lateral - (bike.width / 2 + self.TARGET_CLEARANCE_M + car_profile.width / 2)
+
+    def oncoming_clear(self, car: dict, bike: dict, bus: dict | None, threat: bool) -> bool:
+        """True when no oncoming vehicle can reach the overtake before the car is back in its lane."""
+        if not threat or bus is None:
+            return True
+        car_u, _ = self._frame(car)
+        bike_u, _ = self._frame(bike)
+        bus_u, _ = self._frame(bus)
+        if bus_u < car_u - 10.0:
+            return True  # already behind the car
+        half = (vehicles.PROFILES[car["profile"]].length + vehicles.PROFILES["bicycle"].length) / 2
+        to_gain = max(0.0, bike_u - car_u + half + self.RETURN_MARGIN_M)
+        seconds = to_gain / max(1.0, self.CRUISE_SPEED - self.bike_speed) + 3.0
+        closing = self.CRUISE_SPEED + max(abs(bus["speed"]), self.CRUISE_SPEED)
+        return bus_u - car_u > closing * seconds + self.ONCOMING_MARGIN_M
+
+    def _steer(self, car: dict, car_v: float, lane: float) -> float:
+        """Head for a point on the target line ahead; a long look-ahead keeps the truck from swinging."""
+        look_ahead = max(self.LOOK_AHEAD_MIN_M, self.LOOK_AHEAD_SEC * abs(car["speed"]))
+        heading = _clamp(math.atan2(lane - car_v, look_ahead), -self.MAX_HEADING, self.MAX_HEADING)
+        error = heading - _wrap(car["yaw"] - self.car_spawn["yaw"])
+        return _clamp(self.STEER_GAIN * error, -1.0, 1.0)
+
+    def step(self, car: dict, bike: dict, bus: dict | None,
+             oncoming_threat: bool) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        """(bike command, car command), each (throttle, brake, steer)."""
+        profile = vehicles.PROFILES[car["profile"]]
+        car_u, car_v = self._frame(car)
+        bike_u, bike_v = self._frame(bike)
+        half = (profile.length + vehicles.PROFILES["bicycle"].length) / 2
+        gap = bike_u - car_u  # centre distance, positive while the bicycle is ahead
+        pass_v = self.pass_lateral(profile, bike_v)
+
+        if self.phase in ("approach", "wait"):
+            clear = self.oncoming_clear(car, bike, bus, oncoming_threat)
+            if clear and gap <= self.SHIFT_START_M:
+                self.phase = "pass"
+            else:
+                self.phase = "approach" if clear else "wait"
+        if self.phase == "pass" and -gap > half + self.RETURN_MARGIN_M:
+            self.phase = "return"
+        if self.phase == "return" and -gap > self.STOP_AHEAD_M:
+            self.phase = "stopping"
+        if self.phase == "stopping" and abs(car["speed"]) < 0.1 and abs(bike["speed"]) < 0.1:
+            self.phase = "done"
+
+        lane = pass_v if self.phase == "pass" else 0.0
+        if self.phase == "wait":
+            target = _clamp(self.bike_speed + 0.5 * (gap - half - self.FOLLOW_GAP_M), 0.0, self.CRUISE_SPEED)
+        elif self.phase == "pass" and car_v > pass_v + 0.2 and gap - half < 5.0:
+            target = self.bike_speed  # not out far enough yet: do not close in
+        elif self.phase in ("stopping", "done"):
+            target = 0.0
+        else:
+            target = self.CRUISE_SPEED
+        car_command = (*speed_command(car["speed"], target), self._steer(car, car_v, lane))
+
+        if self.phase in ("stopping", "done"):
+            throttle, brake, steer = autopilot_command(bike, self.bike_spawn, 0.0)
+            bike_command = (throttle, max(brake, 0.5), steer)
+        else:
+            bike_command = autopilot_command(bike, self.bike_spawn, self.bike_speed)
+        return bike_command, car_command
+
+    def payload(self) -> dict:
+        return {"active": self.phase != "done", "phase": self.phase, "oncoming": self.oncoming}
+
+
 class Gateway:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -293,6 +406,8 @@ class Gateway:
         self.autopilot = self.scenario_config.get("bike_autopilot")
         self.autopilot_started = False
         self.passing = PassingMonitor()
+        self.demo: DemoDriver | None = None
+        self.demo_ready_at = 0.0
         self.roles = list(USERS) + (["oncoming"] if self.oncoming else [])
         self.previous_contact = {role: None for role in self.roles}
         self.wall_start: float | None = None
@@ -328,6 +443,27 @@ class Gateway:
             self.oncoming.reset()
         self.autopilot_started = False
         self.passing.reset()
+        self.demo = None
+
+    def start_demo(self, request: dict, now: float) -> None:
+        if request.get("stop"):
+            self.demo = None
+            return
+        with self.shared.lock:
+            self.shared.oncoming_enabled = request["oncoming"]
+        self.reset_scenario(now)
+        self.demo = DemoDriver(self.world, request["oncoming"])
+        # Brake until the respawned poses have been read back from the plants.
+        self.demo_ready_at = now + RESPAWN_HOLD_SEC + 0.3
+
+    def demo_commands(self, states: dict, now: float, oncoming_enabled: bool) -> dict:
+        """Demo override per role; brakes until the respawn has settled."""
+        car, bike = states.get("car"), states.get("bike")
+        if now < self.demo_ready_at or car is None or bike is None:
+            return {"bike": (0.0, 1.0, 0.0), "car": (0.0, 1.0, 0.0)}
+        threat = oncoming_enabled and self.oncoming is not None and self.oncoming.phase in ("waiting", "approaching")
+        bike_command, car_command = self.demo.step(car, bike, states.get("oncoming"), threat)
+        return {"bike": bike_command, "car": car_command}
 
     def bike_fallback(self, states: dict) -> tuple[float, float, float] | None:
         """Autopilot for an unoccupied bicycle once the car has started moving."""
@@ -348,8 +484,11 @@ class Gateway:
         now = time.monotonic()
         with self.shared.lock:
             reset = self.shared.reset_requested
+            demo_request, self.shared.demo_request = self.shared.demo_request, None
         if reset:
             self.reset_scenario(now)
+        if demo_request:
+            self.start_demo(demo_request, now)
         states = {role: self.read_state(role) for role in self.roles}
         ready = {role: s for role, s in states.items() if s is not None}
         contacts = detect_contacts(self.world, ready) if ready else {}
@@ -362,10 +501,15 @@ class Gateway:
             car_profile = self.shared.car_profile
             oncoming_enabled = self.shared.oncoming_enabled
 
+        demo = self.demo_commands(states, now, oncoming_enabled) if self.demo else {}
         commands = {
-            "bike": self.shared.command("bike", now, fallback=self.bike_fallback(states)),
-            "car": self.shared.command("car", now),
+            "bike": self.shared.command("bike", now, fallback=self.bike_fallback(states), override=demo.get("bike")),
+            "car": self.shared.command("car", now, override=demo.get("car")),
         }
+        demo_state = self.demo.payload() if self.demo else {"active": False}
+        if self.demo and self.demo.phase == "done":
+            self.demo = None  # control returns to the drivers
+            self.autopilot_started = False
         if self.oncoming:
             commands["oncoming"] = self.oncoming.step(oncoming_enabled, states, contacts.get("oncoming"))
         for role, (throttle, brake, steer, respawn) in commands.items():
@@ -383,7 +527,8 @@ class Gateway:
                                  "has_oncoming": self.oncoming is not None,
                                  "oncoming_enabled": oncoming_enabled,
                                  "phase": self.oncoming.phase if self.oncoming else None,
-                                 "bike_autopilot": self.autopilot_started},
+                                 "bike_autopilot": self.autopilot_started,
+                                 "demo": demo_state},
                     "passing": self.passing.update(states.get("car"), states.get("bike"), states.get("oncoming"))}
         snapshot.update(states)
         with self.shared.lock:

@@ -11,6 +11,10 @@ goal:
     来る場合と来ない場合を切り替えられるようにする。
     追加要求: 車が自転車を追い越すときは側方間隔を 1 m 以上あけるルールとし、1 m 未満なら警告を出す。
     交差点シナリオは削除し、追い越しシナリオだけにする。
+    追加要求: デモモード。自転車側でも自動車側でも 1 キー（対向バスなし）か 2 キー（対向バスあり）で、
+    双方が自動で走行し、車が 1 m 以上の間隔を取って自転車を追い越す。
+    追加要求: もう一つのクライアントとして、上空から追い越しの様子を見る画面（斜め上から追従、
+    側方間隔の線と数値、各車両の軌跡）を出す。
   description: >
     Python plant assets (Bike, Car, and an Oncoming bus) integrate a
     kinematic bicycle model under one Hakoniwa clock. A Python controller asset (driver gateway)
@@ -22,6 +26,11 @@ goal:
     The single scenario is an overtake: the car comes from behind and overtakes the cyclist on a
     two-lane road, and the gateway times an oncoming bus to meet the overtake when it is switched on
     in the browser. Every browser warns while the lateral clearance during the overtake is below 1 m.
+    A demo (key 1 without the bus, key 2 with it, Esc to stop) drives both road users from the
+    gateway: the car waits behind the cyclist while the bus would meet the overtake, then passes
+    aiming at 1.5 m of clearance and returns to its lane. A third browser can open the aerial view
+    (role=spectator&view=aerial): a chase camera behind and above the pair, the trails of the car,
+    the bicycle, and the bus, and the lateral clearance drawn on the road while the car passes.
 
 feasibility:
   status: partially_feasible
@@ -47,7 +56,8 @@ validation:
           path: tools/recipe/test_mutual_view_driving.py
           revision: local-validation-2026-10-25
       notes:
-        - 45 tests cover the vehicle model, contact detection, gateway command arbitration, real-time pacing, the oncoming-bus timing and phases, the bicycle autopilot, passing clearance and the 1 m warning, smoke evaluation, and launcher generation.
+        - 52 tests cover the vehicle model, contact detection, gateway command arbitration, real-time pacing, the oncoming-bus timing and phases, the bicycle autopilot, passing clearance and the 1 m warning, the demo driver, smoke evaluation, and launcher generation.
+        - The demo driver is checked in a closed-loop kinematic run for every car type with and without the bus - minimum clearance 1.37 to 1.48 m, no contact, back in the car lane at the end.
         - They pass both inside the Workspace (HAKONIWA_WORK_DIR set) and outside it.
     - id: two_client_smoke
       status: verified
@@ -70,6 +80,24 @@ validation:
         - Oncoming off (switched at runtime in the same session, then reset) - the bus stayed at its spawn.
         - Re-run 2026-10-25 after the two-client part; the car client switched back to a sedan before overtaking. Oncoming on - bus at x=0.8 while the car was beside the bicycle at x=4.6; minimum clearance 0.44 m at about 50 km/h (below the 1 m rule; the scripted driver passes close on purpose). Oncoming off - the bus stayed at x=130.
         - The first attempt failed because the bus spawned 230 m away and could not reach the overtake even at 60 km/h; it now spawns at x=130, still beyond the 170 m fog from the car.
+    - id: demo_smoke
+      status: verified
+      evidence:
+        - repository: hakoniwalab/hakoniwa-business-pack
+          path: tools/recipe/assets/mutual_view_driving/smoke_client.py
+          revision: local-validation-2026-10-25
+      notes:
+        - Third part of the smoke command - a spectator started the demo without and with the bus (sedan).
+        - Without the bus - approach, pass, return, stop; minimum clearance 1.39 m at about 40 km/h; no contact.
+        - With the bus - the car waited behind the cyclist until the bus had passed, then overtook with 1.43 m at about 31 km/h; no contact; the bus was not near during the overtake.
+        - Chrome (car view) - key 2 showed the demo status (approach, wait, overtaking with 1 m or more) and a live clearance of 1.43 m without the red warning; key 1 started the demo without the bus and Esc stopped it.
+        - The truck, SUV, and minivan demo runs are verified only in the kinematic unit test, not in a live session.
+    - id: browser_aerial_view
+      status: verified
+      notes:
+        - 2026-10-25, Chrome on the aerial URL - key 2 ran the demo with the bus; the chase camera framed the car and the cyclist, the clearance line and label read 1.47 m during the pass, and the car, bicycle, and bus trails were drawn.
+        - Key 1 (without the bus) - the car trail showed the car moving out around the cyclist and back to its lane; the panel reported a 1.39 m minimum at 40 km/h.
+        - Only the scripted demo was observed from above; a manually driven overtake below 1 m (red line) was not exercised in the aerial view.
     - id: browser_overtake
       status: verified
       notes:
@@ -336,7 +364,7 @@ demo:
     - order: 3
       id: smoke
       component: hakoniwa-business-pack
-      action: Start the session, drive both roles from two WebSocket clients, overtake the autopilot bicycle with the oncoming bus on and then off, and stop.
+      action: Start the session, drive both roles from two WebSocket clients, overtake the autopilot bicycle with the oncoming bus on and then off, run the demo without and with the bus, and stop.
       command: python tools/recipe/mutual_view_driving.py smoke
       agency: agent_action
     - order: 4
@@ -345,7 +373,8 @@ demo:
       action: >
         Start the session (--oncoming on|off for the initial setting) and open the
         printed bike and car URLs in two browser windows; switch the oncoming bus and reset from the
-        scenario panel.
+        scenario panel. Key 1 (without the bus) or 2 (with the bus) runs the demo; Esc stops it.
+        Open the printed aerial URL in a third window to watch the overtake from above.
       command: python tools/recipe/mutual_view_driving.py start
       agency: agent_action
   readiness:
@@ -385,6 +414,7 @@ demo:
       - The PiP shows the partner's eye height and cabin occlusion for each car profile.
       - The HUD reports whether the partner can currently see you.
       - A red warning appears while the car passes the bicycle with less than 1 m of lateral clearance.
+      - The demo overtakes without the red warning and reports the demo phase in the scenario panel.
     failure_signals:
       - "'hako-cmd' was not found: the runner was started outside the Workspace."
       - A plant log shows asset_register failure.
@@ -392,7 +422,7 @@ demo:
     lifecycle:
       - Gateway, plants, and web server start before hako-cmd start.
     behavior:
-      - Smoke client reports PASS with both vehicles moving, the car on the truck profile, and two overtakes in which the bus meets the overtake only when it is switched on.
+      - Smoke client reports PASS with both vehicles moving, the car on the truck profile, and two overtakes in which the bus meets the overtake only when it is switched on, and two demo runs with at least 1 m of clearance in which the car waits for the bus.
     logs:
       - logs/*.out and validation/smoke-result.json.
 

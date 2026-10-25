@@ -6,6 +6,8 @@
 2. A car client (back in a sedan) overtakes the autopilot bicycle twice, first
    with the oncoming bus switched on, then off (switched at runtime), and checks
    that the bus meets the overtake only when it is on.
+3. A spectator starts the demo without and with the oncoming bus; each run must
+   finish with at least 1 m of clearance and no contact, and wait for the bus.
 """
 
 from __future__ import annotations
@@ -167,17 +169,71 @@ async def run_overtake(uri: str, timeout: float) -> list[dict]:
         return [await overtake_once(websocket, True, timeout), await overtake_once(websocket, False, timeout)]
 
 
+async def demo_once(websocket, oncoming: bool, timeout: float) -> dict:
+    await websocket.send(json.dumps({"type": "demo", "oncoming": oncoming}))
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    result = {"oncoming": oncoming, "phases": [], "contacts": [], "finished": False, "passing": None,
+              "min_clearance_m": None}
+    while loop.time() - started < timeout:
+        try:
+            message = json.loads(await asyncio.wait_for(websocket.recv(), timeout=0.5))
+        except asyncio.TimeoutError:
+            continue
+        if message.get("type") != "state":
+            continue
+        demo = message["scenario"].get("demo") or {}
+        if demo.get("active"):
+            if not result["phases"] or result["phases"][-1] != demo["phase"]:
+                result["phases"].append(demo["phase"])
+            for role, kind in (message.get("contact") or {}).items():
+                if kind and [role, kind] not in result["contacts"]:
+                    result["contacts"].append([role, kind])
+        elif result["phases"]:
+            passing = message.get("passing") or {}
+            result.update(finished=True, passing=passing.get("last"), min_clearance_m=passing.get("min_clearance_m"))
+            return result
+    return result
+
+
+def evaluate_demo(runs: list[dict]) -> list[str]:
+    errors = []
+    for run in runs:
+        label = "demo with the bus" if run["oncoming"] else "demo without the bus"
+        if not run["finished"]:
+            errors.append(f"{label}: did not finish (phases {run['phases']})")
+            continue
+        passing = run.get("passing")
+        if not passing:
+            errors.append(f"{label}: no overtake was recorded")
+        elif passing["min_gap"] < run["min_clearance_m"]:
+            errors.append(f"{label}: minimum clearance {passing['min_gap']} m is under {run['min_clearance_m']} m")
+        if run["contacts"]:
+            errors.append(f"{label}: contacts {run['contacts']}")
+        if run["oncoming"] and ("wait" not in run["phases"] or (passing or {}).get("oncoming_near")):
+            errors.append(f"{label}: the car did not wait for the bus before overtaking")
+    return errors
+
+
+async def run_demo(uri: str, timeout: float) -> list[dict]:
+    async with connect(uri) as websocket:
+        await websocket.send(json.dumps({"type": "join", "role": "spectator"}))
+        return [await demo_once(websocket, False, timeout), await demo_once(websocket, True, timeout)]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--uri", default="ws://127.0.0.1:8771")
     parser.add_argument("--seconds", type=float, default=5.0)
     parser.add_argument("--overtake-timeout", type=float, default=45.0)
+    parser.add_argument("--demo-timeout", type=float, default=90.0)
     parser.add_argument("--car-profile", default="truck")
     args = parser.parse_args(argv)
     clients = asyncio.run(run(args.uri, args.seconds, args.car_profile))
     overtakes = asyncio.run(run_overtake(args.uri, args.overtake_timeout))
-    errors = evaluate(clients, args.car_profile) + evaluate_overtake(overtakes)
-    log = {"clients": clients, "overtake": overtakes}
+    demos = asyncio.run(run_demo(args.uri, args.demo_timeout))
+    errors = evaluate(clients, args.car_profile) + evaluate_overtake(overtakes) + evaluate_demo(demos)
+    log = {"clients": clients, "overtake": overtakes, "demo": demos}
     print(json.dumps({"status": "PASS" if not errors else "FAIL", "errors": errors, "log": log},
                      ensure_ascii=False, indent=2))
     return 0 if not errors else 1
