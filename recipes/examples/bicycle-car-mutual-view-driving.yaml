@@ -29,7 +29,9 @@ goal:
     in the browser. Every browser warns while the lateral clearance during the overtake is below 1 m.
     A demo (key 1 without the bus, key 2 with it, Esc to stop) drives both road users from the
     gateway: the car waits behind the cyclist while the bus would meet the overtake, then passes
-    aiming at 1.5 m of clearance and returns to its lane. A third browser can open the aerial view
+    aiming at 1.5 m of clearance and returns to its lane. While a driver holds the throttle, brake,
+    or steering, that vehicle follows the driver; on release the demo picks it up from where it is.
+    A third browser can open the aerial view
     (role=spectator&view=aerial): a chase camera behind and above the pair, the trails of the car,
     the bicycle, and the bus, and the lateral clearance drawn on the road while the car passes.
 
@@ -94,6 +96,8 @@ validation:
         - With the bus - the car waited behind the cyclist until the bus had passed, then overtook with 1.43 m at about 31 km/h; no contact; the bus was not near during the overtake.
         - Chrome (car view) - key 2 showed the demo status (approach, wait, overtaking with 1 m or more) and a live clearance of 1.43 m without the red warning; key 1 started the demo without the bus and Esc stopped it.
         - The truck, SUV, and minivan demo runs are verified only in the kinematic unit test, not in a live session.
+        - Manual takeover (Chrome, car view, key 1) - holding S at 35 km/h braked the car to 0 with the status "自動車 - 手動操作中"; after release the demo accelerated again and finished the overtake with 1.39 m.
+        - A smoke run fails when other browser windows are joined to the same ports (an occupied bicycle does not ride on autopilot, and a second car client sends its own input); run the smoke on separate ports (--http-port/--ws-port) while browsers are open.
     - id: browser_aerial_view
       status: verified
       notes:

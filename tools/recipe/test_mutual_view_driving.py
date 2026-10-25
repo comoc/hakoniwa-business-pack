@@ -377,6 +377,28 @@ class DemoTest(unittest.TestCase):
         shared.apply_message("bike", {"type": "demo", "stop": True}, 1.0)
         self.assertEqual(shared.demo_request, {"stop": True})
 
+    def test_held_controls_count_as_manual_only_while_fresh(self):
+        shared = driver_gateway.Shared(OVERTAKE)
+        shared.apply_message("car", {"type": "input", "brake": 1.0, "active": True}, 10.0)
+        self.assertTrue(shared.manual("car", 10.2))
+        self.assertFalse(shared.manual("car", 10.0 + driver_gateway.MANUAL_HOLD_SEC + 0.1))
+        shared.apply_message("car", {"type": "input", "steer": 0.4, "active": False}, 11.0)
+        self.assertFalse(shared.manual("car", 11.0))
+        self.assertFalse(shared.manual("bike", 11.0))
+
+    def test_manual_driver_takes_over_their_vehicle_and_the_demo_resumes_on_release(self):
+        args = argparse.Namespace(world=str(APP / "world-overtake.json"), host="127.0.0.1", port=0, delta_usec=20000)
+        gateway = driver_gateway.Gateway(args)
+        gateway.demo = driver_gateway.DemoDriver(OVERTAKE, False)
+        states = {"car": pose(-60.0, 1.6, speed=11.1), "bike": pose(-40.0, 2.55, speed=4.5, profile="bicycle")}
+        gateway.shared.apply_message("car", {"type": "input", "brake": 1.0, "active": True}, 10.0)
+        demo = gateway.demo_commands(states, 10.1, False)
+        self.assertNotIn("car", demo)  # the driver's brake wins
+        self.assertIn("bike", demo)
+        self.assertEqual(gateway.shared.command("car", 10.1, override=demo.get("car")), (0.0, 1.0, 0.0, 0.0))
+        demo = gateway.demo_commands(states, 11.0, False)  # released: no fresh active input
+        self.assertIn("car", demo)
+
     def test_demo_override_ignores_driver_input_but_not_the_respawn_hold(self):
         shared = driver_gateway.Shared(OVERTAKE)
         shared.apply_message("car", {"type": "input", "throttle": 1.0}, 10.0)

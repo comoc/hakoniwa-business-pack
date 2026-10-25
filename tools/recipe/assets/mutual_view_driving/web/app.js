@@ -403,8 +403,10 @@ function updateScenarioPanel() {
     ? `バス: ${PHASE_LABEL[scenario.phase] ?? scenario.phase}` : "";
   const demo = scenario.demo ?? {};
   $("demo-status").hidden = !demo.active;
+  const manual = (demo.manual ?? []).map((role) => LABEL[role]).join("・");
   $("demo-status").textContent = demo.active
-    ? `デモ（対向バス${demo.oncoming ? "あり" : "なし"}）: ${DEMO_LABEL[demo.phase] ?? demo.phase}　Esc で中止` : "";
+    ? `デモ（対向バス${demo.oncoming ? "あり" : "なし"}）: ${DEMO_LABEL[demo.phase] ?? demo.phase}`
+      + `${manual ? `　${manual}: 手動操作中` : ""}　Esc で中止` : "";
   const passing = latest.passing ?? {};
   const fmt = (gap) => (gap === null || gap === undefined ? "-" : `${gap.toFixed(2)} m`);
   $("passing-now").textContent = passing.active ? `追い抜き中: 側方間隔 ${fmt(passing.gap)}（最小 ${fmt(passing.min_gap)}）` : "";
@@ -513,6 +515,8 @@ function readInput(dt) {
     brake = Math.max(brake, pad.buttons[6]?.value ?? 0);
     if (dead(pad.axes[2] ?? 0)) lookDirect = -pad.axes[2] * lookLimit();
   }
+  // The driver is at the controls: during the demo this hands the vehicle back while held.
+  const active = throttle > 0 || brake > 0 || steerTarget !== 0;
   const rate = steerTarget === 0 ? 3 : 2;
   control.steer += Math.max(-rate * dt, Math.min(rate * dt, steerTarget - control.steer));
   if (pad && Math.abs(pad.axes[0]) >= 0.12) control.steer = steerTarget;
@@ -524,7 +528,7 @@ function readInput(dt) {
     throttle = -0.6;
     brake = 0;
   }
-  return { type: "input", throttle, brake, steer: control.steer, look: control.look };
+  return { type: "input", throttle, brake, steer: control.steer, look: control.look, active };
 }
 
 // ---------------------------------------------------------------- networking

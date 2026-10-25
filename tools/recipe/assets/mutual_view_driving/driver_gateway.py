@@ -8,7 +8,8 @@ broadcasts one shared state to every WebSocket client.
 
 Browser -> gateway (JSON):
   {"type": "join", "role": "bike" | "car" | "spectator"}
-  {"type": "input", "throttle": -1..1, "brake": 0..1, "steer": -1..1, "look": rad}
+  {"type": "input", "throttle": -1..1, "brake": 0..1, "steer": -1..1, "look": rad,
+   "active": bool}   (active: a driving control is held; it overrides the demo for that role)
   {"type": "profile", "id": "sedan" | "suv" | "minivan" | "truck"}   (car only)
   {"type": "respawn"}
   {"type": "scenario", "oncoming": true | false}                     (any participant)
@@ -46,6 +47,7 @@ TWIST_SIZE, VECTOR3_SIZE = 72, 48
 USERS = {"bike": "Bike", "car": "Car"}
 ROBOTS = {**USERS, "oncoming": "Oncoming"}
 INPUT_TIMEOUT_SEC = 1.0
+MANUAL_HOLD_SEC = 0.3  # an "active" input keeps the role out of the demo this long (inputs arrive at ~30 Hz)
 CONTACT_HOLD_SEC = 1.5
 RESPAWN_HOLD_SEC = 0.2
 BROADCAST_HZ = 30.0
@@ -85,7 +87,8 @@ class Shared:
     def __init__(self, world: dict, oncoming_enabled: bool = True):
         self.lock = threading.Lock()
         self.world = world
-        self.inputs = {role: {"throttle": 0.0, "brake": 0.0, "steer": 0.0, "look": 0.0, "at": 0.0}
+        self.inputs = {role: {"throttle": 0.0, "brake": 0.0, "steer": 0.0, "look": 0.0, "active": False,
+                              "at": 0.0}
                        for role in USERS}
         self.respawn_until = {role: 0.0 for role in USERS}
         self.contact_until = {role: 0.0 for role in USERS}
@@ -118,12 +121,19 @@ class Shared:
                     "brake": float(message.get("brake", 0.0)),
                     "steer": float(message.get("steer", 0.0)),
                     "look": float(message.get("look", 0.0)),
+                    "active": bool(message.get("active", False)),
                     "at": now,
                 }
             elif kind == "respawn":
                 self.respawn_until[role] = now + RESPAWN_HOLD_SEC
             elif kind == "profile" and role == "car" and message.get("id") in vehicles.CAR_PROFILE_IDS:
                 self.car_profile = message["id"]
+
+    def manual(self, role: str, now: float) -> bool:
+        """The driver of `role` is holding a driving control right now."""
+        with self.lock:
+            data = self.inputs[role]
+            return data["active"] and now - data["at"] <= MANUAL_HOLD_SEC
 
     def command(self, role: str, now: float, fallback: tuple[float, float, float] | None = None,
                 override: tuple[float, float, float] | None = None) -> tuple[float, float, float, float]:
@@ -457,13 +467,18 @@ class Gateway:
         self.demo_ready_at = now + RESPAWN_HOLD_SEC + 0.3
 
     def demo_commands(self, states: dict, now: float, oncoming_enabled: bool) -> dict:
-        """Demo override per role; brakes until the respawn has settled."""
+        """Demo override per role; brakes until the respawn has settled.
+
+        A role whose driver is holding a control is left out, so its own input drives it; the demo
+        picks the vehicle up again from wherever it is once the control is released.
+        """
         car, bike = states.get("car"), states.get("bike")
         if now < self.demo_ready_at or car is None or bike is None:
             return {"bike": (0.0, 1.0, 0.0), "car": (0.0, 1.0, 0.0)}
         threat = oncoming_enabled and self.oncoming is not None and self.oncoming.phase in ("waiting", "approaching")
         bike_command, car_command = self.demo.step(car, bike, states.get("oncoming"), threat)
-        return {"bike": bike_command, "car": car_command}
+        commands = {"bike": bike_command, "car": car_command}
+        return {role: command for role, command in commands.items() if not self.shared.manual(role, now)}
 
     def bike_fallback(self, states: dict) -> tuple[float, float, float] | None:
         """Autopilot for an unoccupied bicycle once the car has started moving."""
@@ -506,7 +521,8 @@ class Gateway:
             "bike": self.shared.command("bike", now, fallback=self.bike_fallback(states), override=demo.get("bike")),
             "car": self.shared.command("car", now, override=demo.get("car")),
         }
-        demo_state = self.demo.payload() if self.demo else {"active": False}
+        demo_state = ({**self.demo.payload(), "manual": [role for role in USERS if self.shared.manual(role, now)]}
+                      if self.demo else {"active": False})
         if self.demo and self.demo.phase == "done":
             self.demo = None  # control returns to the drivers
             self.autopilot_started = False
