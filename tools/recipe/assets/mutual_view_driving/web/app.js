@@ -11,6 +11,7 @@ const wsUrl = params.get("ws") ?? `ws://${location.hostname || "127.0.0.1"}:8771
 let myRole = params.get("role");
 let aerial = params.get("view") === "aerial"; // spectator watching the overtake from above
 let swapped = false;
+let pipOn = false; // the partner's view (picture-in-picture) starts hidden; P or the HUD button shows it
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -353,10 +354,7 @@ function setAerial(on) {
   for (const trail of Object.values(trails)) trail.mesh.visible = on;
 }
 
-// ---------------------------------------------------------------- HUD, PiP, minimap
-const mapCamera = new THREE.OrthographicCamera(-30, 30, 30, -30, 1, 200);
-mapCamera.up.set(0, 0, -1); // north (world +y, three -z) at the top
-mapCamera.layers.enable(RIDER_LAYER);
+// ---------------------------------------------------------------- HUD and PiP
 let profiles = {};
 let latest = null;
 let lastVisibilityCheck = 0;
@@ -436,13 +434,9 @@ function layout() {
   const pipW = Math.round(Math.min(W * 0.36, 560));
   const pipH = Math.round(pipW * 9 / 16);
   const pip = { x: W - pipW - 16, y: 16, w: pipW, h: pipH };
-  const mapSize = Math.round(Math.min(220, W * 0.22));
-  const map = { x: 16, y: H - mapSize - 16, w: mapSize, h: mapSize };
-  for (const [id, r] of [["pip-frame", pip], ["map-frame", map]]) {
-    Object.assign($(id).style, { left: `${r.x - 2}px`, top: `${r.y - 2}px`, width: `${r.w}px`, height: `${r.h}px` });
-  }
+  Object.assign($("pip-frame").style, { left: `${pip.x - 2}px`, top: `${pip.y - 2}px`, width: `${pip.w}px`, height: `${pip.h}px` });
   Object.assign($("pip-label").style, { left: `${pip.x + 6}px`, top: `${pip.y + pip.h - 28}px` });
-  return { W, H, pip, map };
+  return { W, H, pip };
 }
 
 function renderView(camera, rect, H) {
@@ -470,7 +464,7 @@ function frame(now) {
     requestAnimationFrame(frame);
     return;
   }
-  const { W, H, pip, map } = layout();
+  const { W, H, pip } = layout();
   const mainRole = myRole in users ? myRole : "bike";
   const [mainUser, pipUser] = swapped ? [users[partnerOf(mainRole)], users[mainRole]]
     : [users[mainRole], users[partnerOf(mainRole)]];
@@ -478,11 +472,7 @@ function frame(now) {
     : pipUser.role === mainRole ? "自分の視点" : `相手（${LABEL[pipUser.role]}）の視点`;
   renderer.setScissorTest(true);
   renderView(mainUser.camera, { x: 0, y: 0, w: W, h: H }, H);
-  renderView(pipUser.camera, pip, H);
-  const center = users[mainRole].root.position;
-  mapCamera.position.set(center.x, 100, center.z);
-  mapCamera.lookAt(center.x, 0, center.z);
-  renderView(mapCamera, map, H);
+  if (pipOn) renderView(pipUser.camera, pip, H);
   updateHud(now);
   requestAnimationFrame(frame);
 }
@@ -495,6 +485,7 @@ addEventListener("keydown", (e) => {
   if (e.target.tagName === "SELECT") return;
   keys.add(e.code);
   if (e.code === "KeyV") swapped = !swapped;
+  if (e.code === "KeyP") setPip(!pipOn);
   if (e.code === "KeyR") send({ type: "respawn" });
   if (e.code === "KeyC") control.look = 0;
   if (e.code === "Digit1" || e.code === "Numpad1") send({ type: "demo", oncoming: false });
@@ -623,6 +614,18 @@ if (!myRole) {
   }
 }
 
+function setPip(on) {
+  pipOn = on;
+  document.body.classList.toggle("pip-off", !on);
+  $("pip-toggle").textContent = `相手の視点: ${on ? "オン" : "オフ"}`;
+  $("pip-toggle").classList.toggle("on", on);
+}
+$("pip-toggle").addEventListener("click", (e) => {
+  setPip(!pipOn);
+  e.currentTarget.blur();
+});
+
+setPip(pipOn);
 setAerial(aerial);
 connect();
 requestAnimationFrame(frame);

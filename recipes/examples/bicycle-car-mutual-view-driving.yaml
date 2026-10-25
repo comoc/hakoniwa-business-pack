@@ -21,8 +21,9 @@ goal:
     owns the single-host Conductor, paces
     simulation time to wall-clock time, converts inputs from several browser clients into cmd
     PDUs, reads pose/vel PDUs, detects contacts, and broadcasts one shared state over WebSocket.
-    Each browser renders the same Three.js world from its own driver eye and shows the partner's
-    driver eye as picture-in-picture, including the partner's cabin pillars, hood, and blind zones.
+    Each browser renders the same Three.js world from its own driver eye and can show the partner's
+    driver eye as picture-in-picture (hidden at first; P key or HUD button), including the partner's
+    cabin pillars, hood, and blind zones.
     The single scenario is an overtake: the car comes from behind and overtakes the cyclist on a
     two-lane road, and the gateway times an oncoming bus to meet the overtake when it is switched on
     in the browser. Every browser warns while the lateral clearance during the overtake is below 1 m.
@@ -45,8 +46,9 @@ validation:
   status: partially_verified
   summary: >
     On native Windows x64 (2026-10-21, re-run 2026-10-25, localhost) the unit tests passed, the
-    smoke (two clients, then two overtakes) passed, and a browser rendered the car view, the bike view, the partner PiP, the minimap,
-    and the visibility indicators. Two human participants on separate browsers, gamepad input,
+    smoke (two clients, two overtakes, two demo runs) passed, and a browser rendered the car view,
+    the bike view, the partner PiP (toggled with P or the HUD button), the visibility indicators,
+    and the aerial view. The minimap was removed on 2026-10-25. Two human participants on separate browsers, gamepad input,
     macOS/Linux, and LAN use are not yet verified.
   steps:
     - id: kinematic_model_unit_tests
