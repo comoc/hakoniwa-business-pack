@@ -401,6 +401,11 @@ function updateScenarioPanel() {
   toggle.classList.toggle("off", !scenario.oncoming_enabled);
   $("oncoming-phase").textContent = scenario.has_oncoming && scenario.oncoming_enabled
     ? `バス: ${PHASE_LABEL[scenario.phase] ?? scenario.phase}` : "";
+  const hold = $("hold-status");
+  hold.hidden = !scenario.hold;
+  hold.classList.toggle("contact", scenario.hold === "contact");
+  hold.textContent = scenario.hold === "contact" ? "接触したため停止しました。「シナリオをリセット」で開始点に戻ります"
+    : scenario.hold === "start" ? "開始点で停止中。アクセル（W / ↑）で走り出します" : "";
   const demo = scenario.demo ?? {};
   $("demo-status").hidden = !demo.active;
   const manual = (demo.manual ?? []).map((role) => LABEL[role]).join("・");
@@ -426,6 +431,14 @@ $("oncoming-toggle").addEventListener("click", (e) => {
   send({ type: "scenario", oncoming: !(latest?.scenario?.oncoming_enabled) });
   e.currentTarget.blur();
 });
+for (const [buttonId, panelId] of [["scenario-fold", "scenario"], ["hud-fold", "hud"], ["help-fold", "help"]]) {
+  $(buttonId).addEventListener("click", (e) => {
+    const folded = $(panelId).classList.toggle("folded");
+    e.currentTarget.textContent = folded ? "▾" : "▴";
+    e.currentTarget.title = folded ? "開く" : "折りたたむ";
+    e.currentTarget.blur();
+  });
+}
 $("reset-scenario").addEventListener("click", (e) => {
   send({ type: "reset" });
   e.currentTarget.blur();

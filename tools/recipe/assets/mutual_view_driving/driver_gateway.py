@@ -48,7 +48,6 @@ USERS = {"bike": "Bike", "car": "Car"}
 ROBOTS = {**USERS, "oncoming": "Oncoming"}
 INPUT_TIMEOUT_SEC = 1.0
 MANUAL_HOLD_SEC = 0.3  # an "active" input keeps the role out of the demo this long (inputs arrive at ~30 Hz)
-CONTACT_HOLD_SEC = 1.5
 RESPAWN_HOLD_SEC = 0.2
 BROADCAST_HZ = 30.0
 MAX_LAG_SEC = 0.2
@@ -91,7 +90,9 @@ class Shared:
                               "at": 0.0}
                        for role in USERS}
         self.respawn_until = {role: 0.0 for role in USERS}
-        self.contact_until = {role: 0.0 for role in USERS}
+        # "start": everyone waits at the spawn until a driver presses the throttle;
+        # "contact": everything stops after a contact until the scenario is reset.
+        self.hold: str | None = None
         self.car_profile = "sedan"
         self.occupied = {role: 0 for role in USERS}
         self.oncoming_enabled = oncoming_enabled
@@ -135,6 +136,13 @@ class Shared:
             data = self.inputs[role]
             return data["active"] and now - data["at"] <= MANUAL_HOLD_SEC
 
+    def release_start_hold(self, now: float) -> None:
+        """Leave the start hold as soon as either driver presses the throttle."""
+        with self.lock:
+            if self.hold == "start" and any(data["throttle"] > 0.0 and now - data["at"] <= MANUAL_HOLD_SEC
+                                            for data in self.inputs.values()):
+                self.hold = None
+
     def command(self, role: str, now: float, fallback: tuple[float, float, float] | None = None,
                 override: tuple[float, float, float] | None = None) -> tuple[float, float, float, float]:
         """(throttle, brake, steer, respawn) to send to a plant.
@@ -145,7 +153,9 @@ class Shared:
         with self.lock:
             if now < self.respawn_until[role]:
                 return HOLD
-            if now < self.contact_until[role]:
+            if self.hold == "start":
+                return HOLD
+            if self.hold == "contact":
                 return 0.0, 1.0, 0.0, 0.0
             if override is not None:
                 return (*override, 0.0)
@@ -409,6 +419,7 @@ class Gateway:
         self.world = json.loads(Path(args.world).read_text(encoding="utf-8"))
         self.scenario_config = self.world.get("scenario", {})
         self.shared = Shared(self.world, oncoming_enabled=getattr(args, "oncoming", "on") == "on")
+        self.shared.hold = "start"
         self.oncoming = None
         if "oncoming" in self.scenario_config:
             self.oncoming = OncomingScenario(self.scenario_config["oncoming"], self.world["spawn"]["oncoming"],
@@ -419,7 +430,7 @@ class Gateway:
         self.demo: DemoDriver | None = None
         self.demo_ready_at = 0.0
         self.roles = list(USERS) + (["oncoming"] if self.oncoming else [])
-        self.previous_contact = {role: None for role in self.roles}
+        self.settled_at = 0.0  # contacts are ignored until respawned poses have been read back
         self.wall_start: float | None = None
         self.sim_start: int | None = None
 
@@ -449,6 +460,8 @@ class Gateway:
             for role in USERS:
                 self.shared.respawn_until[role] = now + RESPAWN_HOLD_SEC
             self.shared.reset_requested = False
+            self.shared.hold = "start"
+        self.settled_at = now + RESPAWN_HOLD_SEC + 0.3
         if self.oncoming:
             self.oncoming.reset()
         self.autopilot_started = False
@@ -462,6 +475,8 @@ class Gateway:
         with self.shared.lock:
             self.shared.oncoming_enabled = request["oncoming"]
         self.reset_scenario(now)
+        with self.shared.lock:
+            self.shared.hold = None
         self.demo = DemoDriver(self.world, request["oncoming"])
         # Brake until the respawned poses have been read back from the plants.
         self.demo_ready_at = now + RESPAWN_HOLD_SEC + 0.3
@@ -504,15 +519,15 @@ class Gateway:
             self.reset_scenario(now)
         if demo_request:
             self.start_demo(demo_request, now)
+        self.shared.release_start_hold(now)
         states = {role: self.read_state(role) for role in self.roles}
         ready = {role: s for role, s in states.items() if s is not None}
         contacts = detect_contacts(self.world, ready) if ready else {}
         with self.shared.lock:
-            for role, kind in contacts.items():
-                # Hold only on a new contact so a driver can back out of it afterwards.
-                if kind and not self.previous_contact.get(role) and role in USERS:
-                    self.shared.contact_until[role] = now + CONTACT_HOLD_SEC
-                self.previous_contact[role] = kind
+            if self.shared.hold is None and now >= self.settled_at and any(contacts.values()):
+                self.shared.hold = "contact"  # everything stops until the scenario is reset
+                self.demo = None
+            hold = self.shared.hold
             car_profile = self.shared.car_profile
             oncoming_enabled = self.shared.oncoming_enabled
 
@@ -528,6 +543,8 @@ class Gateway:
             self.autopilot_started = False
         if self.oncoming:
             commands["oncoming"] = self.oncoming.step(oncoming_enabled, states, contacts.get("oncoming"))
+            if hold == "contact":
+                commands["oncoming"] = (0.0, 1.0, 0.0, 0.0)
         for role, (throttle, brake, steer, respawn) in commands.items():
             cmd = Twist()
             cmd.linear.x, cmd.linear.y, cmd.angular.z, cmd.angular.x = throttle, brake, steer, respawn
@@ -544,6 +561,7 @@ class Gateway:
                                  "oncoming_enabled": oncoming_enabled,
                                  "phase": self.oncoming.phase if self.oncoming else None,
                                  "bike_autopilot": self.autopilot_started,
+                                 "hold": hold,
                                  "demo": demo_state},
                     "passing": self.passing.update(states.get("car"), states.get("bike"), states.get("oncoming"))}
         snapshot.update(states)

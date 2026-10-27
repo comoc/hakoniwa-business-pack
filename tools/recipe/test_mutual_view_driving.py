@@ -153,10 +153,28 @@ class GatewayCommandTest(unittest.TestCase):
 
     def test_contact_and_respawn_override_input(self):
         self.shared.apply_message("bike", {"type": "input", "throttle": 1.0}, 10.0)
-        self.shared.contact_until["bike"] = 11.0
+        self.shared.hold = "contact"
         self.assertEqual(self.shared.command("bike", 10.5), (0.0, 1.0, 0.0, 0.0))
         self.shared.apply_message("bike", {"type": "respawn"}, 10.6)
         self.assertEqual(self.shared.command("bike", 10.7)[3], 1.0)
+
+    def test_start_hold_keeps_everyone_at_the_spawn_until_the_throttle(self):
+        self.shared.hold = "start"
+        self.shared.apply_message("car", {"type": "input", "brake": 1.0, "steer": 0.5}, 10.0)
+        self.shared.release_start_hold(10.1)
+        self.assertEqual(self.shared.command("car", 10.1), driver_gateway.HOLD)
+        self.assertEqual(self.shared.command("bike", 10.1, fallback=(0.5, 0.0, 0.0)), driver_gateway.HOLD)
+        self.shared.apply_message("bike", {"type": "input", "throttle": 0.6}, 10.2)
+        self.shared.release_start_hold(10.3)
+        self.assertIsNone(self.shared.hold)
+        self.assertEqual(self.shared.command("bike", 10.3)[0], 0.6)
+
+    def test_contact_hold_is_released_only_by_a_reset(self):
+        self.shared.hold = "contact"
+        self.shared.apply_message("car", {"type": "input", "throttle": 1.0}, 10.0)
+        self.shared.release_start_hold(10.1)
+        self.assertEqual(self.shared.hold, "contact")
+        self.assertEqual(self.shared.command("car", 10.1), (0.0, 1.0, 0.0, 0.0))
 
     def test_only_the_car_can_select_a_car_profile(self):
         self.shared.apply_message("bike", {"type": "profile", "id": "truck"}, 1.0)
@@ -390,6 +408,7 @@ class DemoTest(unittest.TestCase):
         args = argparse.Namespace(world=str(APP / "world-overtake.json"), host="127.0.0.1", port=0, delta_usec=20000)
         gateway = driver_gateway.Gateway(args)
         gateway.demo = driver_gateway.DemoDriver(OVERTAKE, False)
+        gateway.shared.hold = None  # start_demo leaves the start hold
         states = {"car": pose(-60.0, 1.6, speed=11.1), "bike": pose(-40.0, 2.55, speed=4.5, profile="bicycle")}
         gateway.shared.apply_message("car", {"type": "input", "brake": 1.0, "active": True}, 10.0)
         demo = gateway.demo_commands(states, 10.1, False)
@@ -405,6 +424,36 @@ class DemoTest(unittest.TestCase):
         self.assertEqual(shared.command("car", 10.1, override=(0.2, 0.0, 0.3)), (0.2, 0.0, 0.3, 0.0))
         shared.respawn_until["car"] = 11.0
         self.assertEqual(shared.command("car", 10.5, override=(0.2, 0.0, 0.3)), driver_gateway.HOLD)
+
+
+class HoldTest(unittest.TestCase):
+    def tick(self, gateway, states, now):
+        with mock.patch.object(gateway, "read_state", side_effect=lambda role: states.get(role)), \
+                mock.patch.object(gateway, "pace"), \
+                mock.patch.object(driver_gateway, "hakopy") as hakopy, \
+                mock.patch.object(driver_gateway.time, "monotonic", return_value=now):
+            hakopy.simulation_time.return_value = 0
+            gateway.tick()
+        return gateway.shared.snapshot
+
+    def test_contact_stops_everything_until_the_reset_returns_to_the_start_hold(self):
+        args = argparse.Namespace(world=str(APP / "world-overtake.json"), host="127.0.0.1", port=0, delta_usec=20000)
+        gateway = driver_gateway.Gateway(args)
+        self.assertEqual(gateway.shared.hold, "start")
+        gateway.shared.apply_message("car", {"type": "input", "throttle": 1.0}, 10.0)
+        apart = {"car": pose(-60.0, 1.6, speed=5.0), "bike": pose(-40.0, 2.55, speed=4.5, profile="bicycle")}
+        self.assertIsNone(self.tick(gateway, apart, 10.1)["scenario"]["hold"])
+        gateway.demo = driver_gateway.DemoDriver(OVERTAKE, False)
+        touching = {"car": pose(-40.0, 2.0, speed=5.0), "bike": pose(-40.0, 2.55, speed=4.5, profile="bicycle")}
+        self.assertEqual(self.tick(gateway, touching, 10.2)["scenario"]["hold"], "contact")
+        self.assertIsNone(gateway.demo)
+        self.assertEqual(gateway.shared.command("car", 10.2), (0.0, 1.0, 0.0, 0.0))
+        self.assertEqual(self.tick(gateway, apart, 10.3)["scenario"]["hold"], "contact")
+        gateway.shared.apply_message(None, {"type": "reset"}, 10.4)
+        # Stale overlapping poses right after the reset must not stop the scenario again.
+        gateway.shared.apply_message("car", {"type": "input", "throttle": 0.0}, 10.5)
+        self.assertEqual(self.tick(gateway, touching, 10.5)["scenario"]["hold"], "start")
+        self.assertEqual(gateway.shared.command("car", 11.0), driver_gateway.HOLD)
 
 
 class PacingTest(unittest.TestCase):

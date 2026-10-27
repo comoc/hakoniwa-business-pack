@@ -15,6 +15,10 @@
     #hud .speed { font-size: 40px; font-weight: 700; line-height: 1; }
     #hud .speed small { font-size: 14px; font-weight: 400; margin-left: 4px; }
     #hud .row { margin-top: 6px; font-size: 14px; }
+    /* Folded: only the speed stays. */
+    #hud.folded .row { display: none; }
+    #hud-fold { position: absolute; right: 8px; top: 8px; font-size: 13px; padding: 0 8px; border-radius: 6px;
+      border: 0; cursor: pointer; background: #3a4458; color: var(--text); font-weight: 700; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 13px; font-weight: 600; }
     .badge.ok { background: var(--ok); color: #08130a; }
     .badge.ng { background: var(--warn); color: #fff; }
@@ -30,6 +34,10 @@
       background: rgba(200, 30, 30, 0.85); display: none; }
     #help { right: 16px; bottom: 16px; font-size: 12px; line-height: 1.6; max-width: 300px; }
     #help kbd { background: #333; border-radius: 3px; padding: 0 5px; font-family: inherit; }
+    #help-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    #help.folded #help-body { display: none; }
+    #help-fold { font-size: 13px; padding: 0 8px; border-radius: 6px; border: 0; cursor: pointer;
+      background: #3a4458; color: var(--text); font-weight: 700; }
     #lobby { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
       background: rgba(10, 12, 18, 0.92); }
     #lobby .box { background: #1b2130; padding: 28px 32px; border-radius: 12px; max-width: 520px; }
@@ -52,10 +60,16 @@
     #scenario button.off { background: #555; color: #eee; }
     #scenario button.secondary { background: #3a4458; color: var(--text); }
     #scenario .line { margin-top: 4px; font-size: 13px; }
+    /* Folded: only the title, the 1 m warning and the contact notice stay. */
+    #scenario.folded > :not(#scenario-name):not(#scenario-fold):not(#passing-warning):not(.contact) { display: none; }
+    #scenario #scenario-fold { margin: 0 0 0 6px; padding: 0 8px; }
     #passing-now { color: #ffd54f; font-weight: 700; }
     #passing-warning { margin-top: 6px; padding: 6px 12px; border-radius: 6px; background: #c62828; color: #fff;
       font-size: 18px; font-weight: 700; }
     #passing-last.violation { color: #ff8a80; font-weight: 700; }
+    #hold-status { margin-top: 6px; padding: 4px 10px; border-radius: 6px; background: #455a64; color: #fff;
+      font-size: 14px; font-weight: 700; }
+    #hold-status.contact { background: #c62828; font-size: 18px; }
     #demo-status { margin-top: 6px; padding: 4px 10px; border-radius: 6px; background: #1565c0; color: #fff;
       font-size: 14px; font-weight: 700; }
   </style>
@@ -65,6 +79,7 @@
 </head>
 <body>
   <div id="hud" class="panel">
+    <button id="hud-fold" title="折りたたむ">▴</button>
     <div class="speed"><span id="speed">0</span><small>km/h</small></div>
     <div class="row">あなた: <b id="me-label">-</b>
       <select id="profile-select" hidden></select></div>
@@ -75,10 +90,12 @@
   </div>
   <div id="scenario" class="panel">
     <b id="scenario-name">-</b>
+    <button id="scenario-fold" class="secondary" title="折りたたむ">▴</button>
     <div>
       <button id="oncoming-toggle" hidden>対向バス: -</button>
       <button id="reset-scenario" class="secondary">シナリオをリセット</button>
     </div>
+    <div id="hold-status" hidden></div>
     <div id="demo-status" hidden></div>
     <div id="oncoming-phase" class="line"></div>
     <div id="passing-now" class="line"></div>
@@ -96,11 +113,14 @@
     <i style="background:#26c6da"></i>側方間隔（1 m 未満は赤）
   </div>
   <div id="help" class="panel">
+    <div id="help-head"><b>操作方法</b><button id="help-fold" title="折りたたむ">▴</button></div>
+    <div id="help-body">
     <kbd>W</kbd>/<kbd>↑</kbd> 加速　<kbd>S</kbd>/<kbd>↓</kbd> ブレーキ（停止中は後退）<br>
     <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> ハンドル　<kbd>Q</kbd><kbd>E</kbd> 左右を見る（自転車は後方確認まで）　<kbd>C</kbd> 正面<br>
     <kbd>P</kbd> 相手の視点（PiP）の表示　<kbd>V</kbd> メインと PiP を入れ替え　<kbd>R</kbd> スタート位置へ戻る<br>
     <kbd>1</kbd> デモ（対向バスなし）　<kbd>2</kbd> デモ（対向バスあり）　<kbd>Esc</kbd> デモ中止<br>
     ゲームパッド: 左スティック ハンドル / R2 加速 / L2 ブレーキ / 右スティック 視線
+    </div>
   </div>
   <div id="status" class="panel">接続中…</div>
   <div id="lobby" hidden>

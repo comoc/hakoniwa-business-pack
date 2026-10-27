@@ -60,7 +60,7 @@ validation:
           path: tools/recipe/test_mutual_view_driving.py
           revision: local-validation-2026-10-25
       notes:
-        - 52 tests cover the vehicle model, contact detection, gateway command arbitration, real-time pacing, the oncoming-bus timing and phases, the bicycle autopilot, passing clearance and the 1 m warning, the demo driver, smoke evaluation, and launcher generation.
+        - 57 tests cover the vehicle model, contact detection, gateway command arbitration, the start and contact holds, real-time pacing, the oncoming-bus timing and phases, the bicycle autopilot, passing clearance and the 1 m warning, the demo driver and manual takeover, smoke evaluation, and launcher generation.
         - The demo driver is checked in a closed-loop kinematic run for every car type with and without the bus - minimum clearance 1.37 to 1.48 m, no contact, back in the car lane at the end.
         - They pass both inside the Workspace (HAKONIWA_WORK_DIR set) and outside it.
     - id: two_client_smoke
@@ -97,7 +97,19 @@ validation:
         - Chrome (car view) - key 2 showed the demo status (approach, wait, overtaking with 1 m or more) and a live clearance of 1.43 m without the red warning; key 1 started the demo without the bus and Esc stopped it.
         - The truck, SUV, and minivan demo runs are verified only in the kinematic unit test, not in a live session.
         - Manual takeover (Chrome, car view, key 1) - holding S at 35 km/h braked the car to 0 with the status "自動車 - 手動操作中"; after release the demo accelerated again and finished the overtake with 1.39 m.
+        - Re-run 2026-10-25 after adding the start and contact holds - PASS (two clients moved the bike 8.3 m and the car 6.7 m; both overtakes and both demo runs passed, 1.43 m with the bus).
         - A smoke run fails when other browser windows are joined to the same ports (an occupied bicycle does not ride on autopilot, and a second car client sends its own input); run the smoke on separate ports (--http-port/--ws-port) while browsers are open.
+    - id: contact_and_start_hold
+      status: verified
+      evidence:
+        - repository: hakoniwalab/hakoniwa-business-pack
+          path: tools/recipe/assets/mutual_view_driving/driver_gateway.py
+          revision: local-validation-2026-10-25
+      notes:
+        - Live session on separate ports with one car WebSocket client. After a reset the car and bicycle stayed at their spawns (car x=-120, bike x=-40) while the client held brake and steer; full throttle released the hold.
+        - The car hit the bicycle; the gateway stopped the car, the bicycle, and the bus, ended the demo, and kept everything stopped for 3 s of full throttle. A reset returned both to their spawns with no contact.
+        - The stop is a full brake, not a freeze - from about 60 km/h the car slid about 20 m past the contact point.
+        - Chrome (aerial) showed the start-hold message in the scenario panel; the red contact message was not observed in a browser.
     - id: browser_aerial_view
       status: verified
       notes:
@@ -297,7 +309,10 @@ data_flow:
       to: bike_plant / car_plant
       data:
         - cmd and profile PDUs
-      description: Inputs older than 1 s become a light brake; a new contact holds full brake for 1.5 s.
+      description: >
+        Inputs older than 1 s become a light brake. After start or a reset every vehicle is held at its
+        spawn until a driver presses the throttle (or a demo starts); any contact brakes every vehicle,
+        including the bus, and keeps it stopped until the scenario is reset.
     - from: bike_plant / car_plant
       to: driver_gateway
       data:
@@ -381,6 +396,8 @@ demo:
         printed bike and car URLs in two browser windows; switch the oncoming bus and reset from the
         scenario panel. Key 1 (without the bus) or 2 (with the bus) runs the demo; Esc stops it.
         Open the printed aerial URL in a third window to watch the overtake from above.
+        The vehicles wait at the start until a driver presses the throttle; after a contact
+        everything stops until the scenario is reset.
       command: python tools/recipe/mutual_view_driving.py start
       agency: agent_action
   readiness:
